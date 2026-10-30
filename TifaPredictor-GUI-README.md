@@ -1,4 +1,4 @@
-# Tifa Predictor GUI
+# Predictor GUI
 
 Run TifaPredictor.luau in the supported Bee Swarm Simulator executor context. It simulates detached item data and never applies wax or sends inventory/trade remotes.
 
@@ -12,7 +12,7 @@ Filters in SINGLE/BATCH count any selected stat improvement relative to the plan
 
 ## Simple GUIDE: offsets and hive bonuses
 
-Choose wax, open GUIDE, set FROM RC and COUNT (1..64), then SHOW. The default range starts at the item's cumulative upgrade-wax count UC and includes 16 reset-offset scenarios.
+Choose wax, open the top-right ··· menu, choose OFFSETS + HIVE BONUSES, set FROM RC and COUNT (1..64), then SHOW. The default range starts at the item's cumulative upgrade-wax count UC and includes 16 reset-offset scenarios.
 
 The report first includes the current item with its existing waxes, if a slot remains. It then lists post-reset RC scenarios in ascending order. Each predicts ONE next wax, enumerating its 32 possible successful random skips. It groups identical full hive-bonus combinations and lists their matching skips, conditional chances and chances including wax success. No target filters are required. The results pane expands to use the space previously occupied by filters.
 
@@ -39,3 +39,13 @@ Large exact batch frontiers switch to streaming instead of failing at the state-
 Latest Madium GUI checks: selected an unwaxed real Lei; ADD worked from SINGLE and switched to BATCH, adding twice then REM left one SoftWax; CLR/ADD/START produced 32 exact branches; header displayed RC. GUIDE with no filters produced current-item hive outcomes plus reset offsets 0..15, including hive bonus text, matching skips and chances. Luau compilation passed. No actual waxes, Turpentine, game inventory writes, auth changes or trade writes were used. Server-side reset transitions and parity with Greg's labels remain unverified.
 
 GitHub main is updated after completed changes. The loader's cache-busting query helps avoid stale executor downloads.
+
+## Reference-style layout
+
+The visible title is Predictor. The main window uses the supplied references' 600-by-450 layout, neutral dark panels, green title, compact SINGLE/BATCH/EXPLORE tabs, Show base toggle and purple/pink/red/blue footer actions. The sidebar uses native item icons, compact name/potential cards and five wax slots. Trade switches to the supplied wide-tab/header arrangement; other sources use the compact header.
+
+Explore's footer contains STEPS, OFFSET, ZOOM IN, COPY ALL, seed toggle and START. STEPS is a legal next-wax-skip range length (1..32); OFFSET is the zero-based start (0..31). These fields filter the 32 legal branches; they do not create additional branches. ZOOM IN retains its prior copied unwaxed base-offset import action. The seed checkbox selects the known current versus original seed; it does not predict a new Swirled seed. Advanced reset/base-skip options and the hive-offset browser are in the ··· menu. The sidebar's close button hides it; the small header list icon restores it.
+
+Left-hand reference-style labels: Base offset is the artificial pre-generation skip, Offset after turp is the native RC skip, and Current offset is the final absolute RNG draw. These are explicitly different quantities; exact Greg-label parity remains unverified. Full copied batch reports retain the more explicit offset wording.
+
+Validation after restyling: Luau compilation and live launch passed. Show base displayed 0/5 and toggling it off restored the original 5/5 history. Trade source produced 190-wide tabs and the moved header controls. Storage restored 60-wide tabs. ADD/START still produced an exact 32-branch batch. Explore footer controls and menu access to the hive guide were checked. A screenshot review confirmed the main layout and native icon sidebar.

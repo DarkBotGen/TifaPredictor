@@ -630,9 +630,9 @@ local StatMods = require(RS.BeeStats.BeeStatMods)
 local WaxTypes = require(RS.WaxTypes)
 local old = getgenv().TifaPredictorUI
 if old and old.Destroy then old.Destroy() end
-local C = {bg=Color3.fromRGB(17,18,17),panel=Color3.fromRGB(25,27,25),button=Color3.fromRGB(39,41,39),
-    text=Color3.fromRGB(202,205,202),muted=Color3.fromRGB(126,132,126),green=Color3.fromRGB(147,255,126),
-    active=Color3.fromRGB(40,97,37),blue=Color3.fromRGB(49,100,153),purple=Color3.fromRGB(65,55,117),red=Color3.fromRGB(119,48,51)}
+local C = {bg=Color3.fromRGB(18,18,18),panel=Color3.fromRGB(25,25,25),button=Color3.fromRGB(39,39,39),
+    text=Color3.fromRGB(195,195,195),muted=Color3.fromRGB(130,130,130),green=Color3.fromRGB(147,255,126),
+    active=Color3.fromRGB(40,99,38),blue=Color3.fromRGB(49,100,153),purple=Color3.fromRGB(65,55,117),red=Color3.fromRGB(119,48,51)}
 local state={source="Storage",index=1,tab="BATCH",wax="SoftWax",chain={},filters={},showBase=false,currentSeed=true,resetFirst=false,
     busy=false,cancelled=false,alive=true,items={},result="Choose an item, then START.",imported=nil,showItems=true,advanced=false}
 local connections={}
@@ -671,10 +671,10 @@ local function resize()
     window.Position=UDim2.new(.5,state.showItems and 137*scale.Scale or 0,.5,0)
 end
 resize();connect(workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"),resize)
-local title=label(window,"Title","Tifa's Predictor",10,6,500,22,12,C.green);title.Font=Enum.Font.GothamBold
+local title=label(window,"Title","Predictor",10,6,420,22,11,C.green);title.Font=Enum.Font.GothamBold
 local minimize=button(window,"Minimize","–",539,7,22,20)
 local close=button(window,"Close","×",569,7,22,20)
-local itemsToggle=button(window,"ToggleItems","ITEMS",450,7,53,20);itemsToggle.TextSize=9
+local itemsToggle=button(window,"ToggleItems","☷",477,7,24,20);itemsToggle.TextSize=9
 minimize.BackgroundTransparency=1;close.BackgroundTransparency=1;close.TextColor3=C.red
 local sourceCaption=label(window,"SourceCaption","SOURCE",45,31,80,12,8,C.muted)
 local waxCaption=label(window,"WaxCaption","WAX",315,31,80,12,8,C.muted)
@@ -689,12 +689,12 @@ local skipTrack=make("Frame",window,{Name="SkipSelector",Position=UDim2.fromOffs
 local skipPrev=button(window,"SkipPrevious","<",390,45,24,23)
 local skip=input(window,"WaxCount","1",414,45,72,23)
 local skipNext=button(window,"SkipNext",">",486,45,24,23)
-label(window,"WaxQuantityCaption","ADD WAXES",415,31,95,12,8,C.muted)
+label(window,"WaxQuantityCaption","",415,31,95,12,8,C.muted)
 skipPrev.BackgroundColor3=C.panel;skip.BackgroundColor3=C.panel;skipNext.BackgroundColor3=C.panel
 local baseButton=button(window,"ShowBase","○  Show base",520,45,72,23)
 baseButton.BackgroundTransparency=1;baseButton.Font=Enum.Font.Gotham;baseButton.TextSize=9
 local tabs={}
-for i,name in ipairs({"SINGLE","BATCH","EXPLORE","GUIDE"}) do tabs[name]=button(window,name,name,10+(i-1)*65,75,60,25) end
+for i,name in ipairs({"SINGLE","BATCH","EXPLORE"}) do tabs[name]=button(window,name,name,10+(i-1)*65,75,60,25) end
 local function pane(name,x,w)
     local p=make("Frame",window,{Name=name,Position=UDim2.fromOffset(x,106),Size=UDim2.fromOffset(w,280),
         BackgroundColor3=C.panel,BorderSizePixel=0});round(p);return p
@@ -702,8 +702,8 @@ end
 local left=pane("CurrentPane",10,190);left.Size=UDim2.fromOffset(190,330)
 local middle=pane("FilterPane",205,160)
 local right=pane("ResultsPane",370,220)
-local filterHeading=label(middle,"Heading","FILTERS (ANY)",7,7,147,15,9,C.muted)
-local resultHeading=label(right,"Heading","PREDICTION RESULTS",10,7,200,15,10,C.muted)
+local filterHeading=label(middle,"Heading","SELECT FILTERS:",7,7,147,15,9,C.muted)
+local resultHeading=label(right,"Heading","MATCHED RESULTS",10,7,200,15,9,C.muted)
 local function scroll(parent,name,x,y,w,h)
     return make("ScrollingFrame",parent,{Name=name,Position=UDim2.fromOffset(x,y),Size=UDim2.fromOffset(w,h),
         BackgroundTransparency=1,BorderSizePixel=0,ScrollBarThickness=3,ScrollBarImageColor3=C.muted,
@@ -724,7 +724,7 @@ local chainLabel=label(window,"Chain","CHAIN: empty",214,393,288,17,8,C.green)
 local add=button(window,"Add","ADD",214,416,50,22,C.purple)
 local remove=button(window,"Remove","REM",269,416,50,22,Color3.fromRGB(101,50,103))
 local clear=button(window,"Clear","CLR",324,416,50,22,C.red)
-local copy=button(window,"CopyResults","COPY REPORT",379,416,107,22,C.blue)
+local copy=button(window,"CopyResults","COPY",379,416,50,22,C.blue)
 local viewStats=button(window,"ViewStats","VIEW STATS",214,416,77,22,C.blue)
 viewStats.Size=UDim2.fromOffset(160,22)
 viewStats.Text="VIEW CURRENT STATS"
@@ -749,10 +749,10 @@ local hideItems=button(inventoryPanel,"HideItems","×",233,8,21,20);hideItems.Ba
 local inventoryScroll=scroll(inventoryPanel,"Cards",7,36,251,406)
 local cardConnections={}
 local renderInventory
-local advancedButton=button(window,"Options","OPTIONS",275,77,84,21)
+local advancedButton=button(window,"Options","···",509,7,22,20);advancedButton.BackgroundTransparency=1
 local planningSummary=label(window,"PlanningSummary","Keep waxes",370,77,220,21,9,C.muted)
 local advancedPanel=make("Frame",window,{Name="AdvancedPanel",Position=UDim2.fromOffset(275,104),
-    Size=UDim2.fromOffset(235,177),BackgroundColor3=C.button,BorderSizePixel=0,ZIndex=12,Visible=false})
+    Size=UDim2.fromOffset(235,204),BackgroundColor3=C.button,BorderSizePixel=0,ZIndex=12,Visible=false})
 round(advancedPanel)
 label(advancedPanel,"Title","Planning options",10,7,200,21,11,C.green)
 local optionsClose=button(advancedPanel,"Close","×",207,7,19,21)
@@ -761,9 +761,10 @@ resetFirst.Font=Enum.Font.Gotham;resetFirst.TextSize=10
 local baseCaption=label(advancedPanel,"BaseOffsetCaption","Base RNG offset",10,70,130,23,10,C.muted)
 local baseOffsetInput=input(advancedPanel,"BaseOffset","0",151,70,74,23)
 seed.Parent=advancedPanel;seed.Position=UDim2.fromOffset(10,103);seed.Size=UDim2.fromOffset(215,24)
-local optionHint=label(advancedPanel,"Hint","Changes affect the simulation only.",10,138,215,28,9,C.muted)
+tabs.GUIDE=button(advancedPanel,"GUIDE","OFFSETS + HIVE BONUSES",10,138,215,25,C.blue)
+local optionHint=label(advancedPanel,"Hint","Changes affect the simulation only.",10,168,215,28,9,C.muted)
 optionHint.TextWrapped=true
-local help=button(window,"Help","?",509,7,22,20);help.BackgroundTransparency=1
+local help=button(advancedPanel,"Help","?",183,7,20,21);help.BackgroundTransparency=1
 local filterDefs={}
 local function notify(text) if state.alive then status.Text=text end end
 local function editable() if state.busy then notify("Press STOP before changing the simulation.");return false end;return true end
@@ -897,9 +898,12 @@ local function refreshCurrent()
     local displayOptions=options();displayOptions.ResetWaxes=false;displayOptions.ShowBase=state.showBase
     local ok,s=pcall(E.Evaluate,item.Data,displayOptions)
     if not ok then setText(currentText,currentScroll,tostring(s));return end
-    local lines={"CUR | W: "..#s.WaxHistory.."/5",item.Data.T,"",
-        "Artificial base skip: "..s.BaseOffset,"Reset skip (RC): "..s.TurpentineOffset,"After reset (draw): "..s.OffsetAfterTurp,"Final RNG draw: "..s.CurrentOffset,"",
-        "Potential: "..string.format("%.3f",s.Quality*5),"",describe(s)}
+    local waxLabels={[1]="Sf",[2]="Hd",[3]="Cs",[4]="Swrl",[5]="Db"}
+    local history={}
+    for _,w in ipairs(s.WaxHistory)do history[#history+1]=(waxLabels[w[1]] or tostring(w[1]))..":"..(w[2] and tostring(w[3] or 0) or "fail")end
+    local lines={"CUR | W: "..#s.WaxHistory.."/5",#history>0 and ("("..table.concat(history,", ")..")") or "","",
+        "Base offset: "..s.BaseOffset,"Offset after turp: "..s.TurpentineOffset,"Current offset: "..s.CurrentOffset,"","-------------------------","",
+        "Potential: "..string.format("%.3f",s.Quality*5),"","-------------------------","",describe(s)}
     setText(currentText,currentScroll,table.concat(lines,"\n"))
 end
 local function refreshFilters()
@@ -943,13 +947,17 @@ local function reloadItems()
     source.Text=state.source;refreshCurrent();refreshFilters()
 end
 local function redraw()
-    for name,b in pairs(tabs) do b.BackgroundColor3=name==state.tab and Color3.fromRGB(49,52,49) or C.panel end
+    for name,b in pairs(tabs) do b.BackgroundColor3=name==state.tab and Color3.fromRGB(46,46,46) or C.panel end
     local explore=state.tab=="EXPLORE";local batch=state.tab=="BATCH";local guide=state.tab=="GUIDE"
     chainLabel.Visible=batch or state.tab=="SINGLE";add.Visible=batch or state.tab=="SINGLE";remove.Visible=add.Visible;clear.Visible=add.Visible;copy.Visible=not explore
-    viewStats.Visible=explore
-    stepsLabel.Visible=guide;steps.Visible=guide;offsetLabel.Visible=guide;offset.Visible=guide
-    stepsLabel.Text="COUNT";offsetLabel.Text="FROM RC"
-    zoom.Visible=false;seed.Visible=true;copyExplore.Visible=explore
+    viewStats.Visible=false
+    stepsLabel.Visible=guide or explore;steps.Visible=guide or explore;offsetLabel.Visible=guide or explore;offset.Visible=guide or explore
+    stepsLabel.Text=guide and "COUNT" or "STEPS:";offsetLabel.Text=guide and "FROM RC" or "OFFSET"
+    zoom.Visible=explore;seed.Visible=true;copyExplore.Visible=explore
+    seed.Parent=explore and window or advancedPanel
+    seed.Position=UDim2.fromOffset(explore and 350 or 10,explore and 417 or 103)
+    seed.Size=UDim2.fromOffset(explore and 148 or 215,21)
+    itemsToggle.Visible=not state.showItems
     if state.tab=="SINGLE" then chainLabel.Text="Choose wax/count → ADD or START" end
     resetFirst.Visible=true
     resetFirst.Text=(state.resetFirst and "●" or "○").." Reset before search"
@@ -967,7 +975,7 @@ local function redraw()
     planningSummary.TextColor3=state.resetFirst and C.green or C.muted
     skipTrack.Visible=not guide;skipPrev.Visible=not guide;skip.Visible=not guide;skipNext.Visible=not guide
     window.WaxQuantityCaption.Visible=not guide
-    filterHeading.Text=(guide or explore) and "TARGETS (ALL)" or "FILTERS (ANY)"
+    filterHeading.Text="SELECT FILTERS:"
     middle.Visible=not guide
     right.Position=UDim2.fromOffset(guide and 205 or 370,106)
     right.Size=UDim2.fromOffset(guide and 385 or 220,280)
@@ -976,13 +984,32 @@ local function redraw()
     if guide then chainLabel.Visible=false;planningSummary.Text="Current RC: "..((selected() and selected().Data.RC) or 0) end
     if not state.busy then start.Text=guide and "SHOW" or "START" end
     if explore then
-        copyExplore.Position=UDim2.fromOffset(379,416);copyExplore.Size=UDim2.fromOffset(76,22)
+        copyExplore.Position=UDim2.fromOffset(214,416);copyExplore.Size=UDim2.fromOffset(100,22)
     end
     if batch then chainLabel.Text="CHAIN: "..(#state.chain>0 and table.concat(state.chain, " > ") or "ADD waxes to begin") end
     baseButton.Text=(state.showBase and "●" or "○").."  Show base"
-    seed.Text=(state.currentSeed and "● Current / swirled seed" or "○ Original seed")
+    seed.Text=explore and ((state.currentSeed and "●" or "○").." Use swirled seed") or (state.currentSeed and "● Current / swirled seed" or "○ Original seed")
     wax.Text=state.wax;resultHeading.Text=guide and "OFFSETS + HIVE BONUSES" or explore and "EXPLORE RESULTS" or "MATCHED RESULTS"
     waxCaption.Text="WAX"
+    local tradeLayout=state.source=="Trade"
+    source.Size=UDim2.fromOffset(tradeLayout and 82 or 110,23)
+    prev.Visible=not tradeLayout;nextButton.Visible=not tradeLayout;itemTrack.Visible=not tradeLayout
+    itemButton.Position=UDim2.fromOffset(tradeLayout and 97 or 154,45)
+    itemButton.Size=UDim2.fromOffset(tradeLayout and 25 or 72,23)
+    if tradeLayout then itemButton.Text="▾" end
+    baseButton.Position=UDim2.fromOffset(tradeLayout and 125 or 520,45)
+    wax.Position=UDim2.fromOffset(tradeLayout and 350 or 270,45)
+    waxCaption.Position=UDim2.fromOffset(tradeLayout and 395 or 315,31)
+    skipTrack.Position=UDim2.fromOffset(tradeLayout and 470 or 390,45)
+    skipPrev.Position=UDim2.fromOffset(tradeLayout and 470 or 390,45)
+    skip.Position=UDim2.fromOffset(tradeLayout and 494 or 414,45)
+    skipNext.Position=UDim2.fromOffset(tradeLayout and 566 or 486,45)
+    for i,name in ipairs({"SINGLE","BATCH","EXPLORE"}) do
+        tabs[name].Position=UDim2.fromOffset(tradeLayout and (10+(i-1)*195) or (10+(i-1)*65),75)
+        tabs[name].Size=UDim2.fromOffset(tradeLayout and 190 or 60,25)
+    end
+    planningSummary.Visible=not tradeLayout
+    left.Size=UDim2.fromOffset(190,explore and 280 or 330)
 end
 local function copyText(text)
     if type(setclipboard)=="function" then local ok,err=pcall(setclipboard,text);notify(ok and "Copied to clipboard." or tostring(err))
@@ -998,27 +1025,27 @@ renderInventory=function()
     if #state.items==0 then label(inventoryScroll,"Empty","No Beequips in this source.",8,8,229,45,11,C.muted) end
     for index,item in ipairs(state.items) do
         local data=item.Data
-        local card=button(inventoryScroll,"BeequipCard"..index,"",1,(index-1)*78+2,242,72)
+        local card=button(inventoryScroll,"BeequipCard"..index,"",1,(index-1)*75+2,242,69)
         card.BackgroundColor3=index==state.index and Color3.fromRGB(39,47,37) or Color3.fromRGB(37,39,37)
         local border=make("UIStroke",card,{Color=C.green,Thickness=1,Transparency=index==state.index and .05 or 1})
-        local iconBox=make("Frame",card,{Name="IconBox",Position=UDim2.fromOffset(5,5),Size=UDim2.fromOffset(58,62),
+        local iconBox=make("Frame",card,{Name="IconBox",Position=UDim2.fromOffset(5,5),Size=UDim2.fromOffset(54,59),
             BackgroundColor3=Color3.fromRGB(28,30,28),BorderSizePixel=0});round(iconBox,6)
         local definition=Types.Get(data.T)
         local image=definition and definition.Icon
-        make("ImageLabel",iconBox,{Name="ItemImage",Position=UDim2.fromOffset(3,3),Size=UDim2.fromOffset(52,56),
+        make("ImageLabel",iconBox,{Name="ItemImage",Position=UDim2.fromOffset(3,3),Size=UDim2.fromOffset(50,55),
             BackgroundTransparency=1,Image=type(image)=="string" and image or "",ScaleType=Enum.ScaleType.Fit})
         if type(image)~="string" or image=="" then
             local fallback=label(iconBox,"Fallback",data.T:sub(1,2):upper(),0,0,58,62,18,C.green)
             fallback.TextXAlignment=Enum.TextXAlignment.Center
         end
-        local name=label(card,"ItemName",data.T,70,5,164,17,11)
+        local name=label(card,"ItemName",data.T,66,5,170,17,11)
         name.Font=Enum.Font.GothamBold;name.TextTruncate=Enum.TextTruncate.AtEnd
-        label(card,"Potential",string.format("%.2f potential",data.Q*5),70,22,164,15,10,C.muted)
+        label(card,"Potential",string.format("%.2f potential",data.Q*5),66,22,170,15,9,C.muted)
         local history=data.W or {}
         for slot=1,5 do
             local w=history[slot]
-            local box=make("Frame",card,{Name="WaxSlot"..slot,Position=UDim2.fromOffset(70+(slot-1)*27,42),
-                Size=UDim2.fromOffset(23,23),BackgroundColor3=Color3.fromRGB(43,45,43),BorderSizePixel=0});round(box,4)
+            local box=make("Frame",card,{Name="WaxSlot"..slot,Position=UDim2.fromOffset(66+(slot-1)*24,39),
+                Size=UDim2.fromOffset(22,22),BackgroundColor3=Color3.fromRGB(43,45,43),BorderSizePixel=0});round(box,4)
             if w then
                 local waxDef=WaxTypes.TypeByID[w[1]]
                 make("ImageLabel",box,{Name="WaxImage",Position=UDim2.fromOffset(1,1),Size=UDim2.fromOffset(21,21),
@@ -1029,17 +1056,17 @@ renderInventory=function()
                 end
             end
         end
-        local count=label(card,"WaxCount",#history.."/5",211,45,24,18,8,C.muted)
+        local count=label(card,"WaxCount","",211,45,24,18,8,C.muted)
         count.TextXAlignment=Enum.TextXAlignment.Right
         cardConnections[#cardConnections+1]=card.Activated:Connect(function()
             if editable() then state.index=index;changed() end
         end)
     end
-    inventoryScroll.CanvasSize=UDim2.fromOffset(0,#state.items*78+4)
+    inventoryScroll.CanvasSize=UDim2.fromOffset(0,#state.items*75+4)
     inventoryScroll.CanvasPosition=oldPosition
 end
 local function toggleInventory()
-    state.showItems=not state.showItems;inventoryPanel.Visible=state.showItems;resize()
+    state.showItems=not state.showItems;inventoryPanel.Visible=state.showItems;resize();redraw()
 end
 connect(itemsToggle.Activated,toggleInventory)
 connect(hideItems.Activated,toggleInventory)
@@ -1077,13 +1104,13 @@ connect(itemButton.Activated,function()
 end)
 connect(wax.Activated,function()
     if not editable() then return end
-    openSelector("Wax",270,180,{"SoftWax","HardWax","CausticWax","DebugWax"},function(entry)state.wax=entry;redraw()end)
+    openSelector("Wax",state.source=="Trade" and 350 or 270,180,{"SoftWax","HardWax","CausticWax","DebugWax"},function(entry)state.wax=entry;redraw()end)
 end)
 connect(skipPrev.Activated,function()if editable() then skip.Text=tostring(((tonumber(skip.Text) or 1)-2)%math.max(1,remainingSlots())+1);redraw() end end)
 connect(skipNext.Activated,function()if editable() then skip.Text=tostring((tonumber(skip.Text) or 1)%math.max(1,remainingSlots())+1);redraw() end end)
 connect(baseButton.Activated,function()if editable() then state.showBase=not state.showBase;refreshCurrent();redraw() end end)
 connect(seed.Activated,function()if editable() then state.currentSeed=not state.currentSeed;refreshCurrent();redraw() end end)
-for name,b in pairs(tabs) do connect(b.Activated,function()if editable() then state.tab=name;if name=="GUIDE" then local item=selected();offset.Text=tostring(item and (item.Data.UC or item.Data.RC) or 0);steps.Text="16" end;state.advanced=false;popup.Visible=false;selector.Visible=false;redraw() end end) end
+for name,b in pairs(tabs) do connect(b.Activated,function()if editable() then state.tab=name;if name=="GUIDE" then local item=selected();offset.Text=tostring(item and (item.Data.UC or item.Data.RC) or 0);steps.Text="16" elseif name=="EXPLORE" then steps.Text="32";offset.Text="0" end;state.advanced=false;popup.Visible=false;selector.Visible=false;redraw() end end) end
 connect(add.Activated,function()if editable() then
     local quantity=tonumber(skip.Text)
     if not quantity or quantity%1~=0 or quantity<1 or quantity>5 then notify("Wax quantity must be 1–5.");return end
@@ -1262,19 +1289,28 @@ connect(start.Activated,function()
                 lines[#lines+1]="RC scenarios are not resource instructions. Reaching an RC needs a valid Soft/Turpentine route. Wax skip is random."
                 setResults(table.concat(lines,"\n"))
             else
+                local from=number(offset.Text,0,31,"Offset")
+                local count=number(steps.Text,1,32,"Steps")
                 local report=E.OffsetOutcomes(item.Data,state.wax,function(result,before)
                     for _,f in ipairs(chosen) do
                         if statValue(result,f)<=statValue(before,f)+1e-9 then return false end
                     end
                     return true
                 end,opts)
+                local matched=0
+                for _,row in ipairs(report.Rows)do
+                    row.Matched=row.Matched and row.Skip>from and row.Skip<=math.min(32,from+count)
+                    if row.Matched then matched+=1 end
+                end
+                report.Matched=matched;report.ConditionalMatchRate=matched/32
+                report.SuccessAndMatchRate=report.ConditionalMatchRate*report.WaxSuccessRate
                 local function pct(v)return string.format("%.4f%%",v*100)end
                 local lines={"NEXT WAX OFFSET MATCHES",state.wax,
                     "Matches: "..report.Matched.." / 32",
                     "Target if wax succeeds: "..pct(report.ConditionalMatchRate),
                     "Wax succeeds + target: "..pct(report.SuccessAndMatchRate),
                     "Reset skip (RC): "..report.Before.TurpentineOffset,
-                    "Sorted by next successful wax skip (1–32).",""}
+                    "Showing skips "..(from+1).."–"..math.min(32,from+count).." (32 possible overall).",""}
                 for _,row in ipairs(report.Rows) do
                     if row.Matched then
                         local result=row.Result
@@ -1370,4 +1406,4 @@ task.spawn(function()
     end
 end)
 reloadItems();redraw()
-return "Tifa's Predictor GUI ready"
+return "Predictor GUI ready"

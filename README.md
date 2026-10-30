@@ -1,4 +1,4 @@
-# TifaPredictor
+# Predictor
 
 Readable Bee Swarm Simulator Beequip prediction simulator with a dark GUI and image inventory sidebar.
 
@@ -36,3 +36,5 @@ Latest update: native inspector auto-selection, next-wax offset matches sorted n
 Offset investigation: see [Beequip-offset-findings.md](Beequip-offset-findings.md). Explore includes per-branch RNG trace positions and full results; single-finisher Guide plans include target results at reachable reset offsets.
 
 Current GUIDE UI: a simple offset-to-hive-bonus browser. Choose wax, FROM RC and COUNT, then SHOW; no target filters or route recommendations are required. ADD now works from both SINGLE and BATCH; native RC stays visible in the header. See the GUI README for current behavior.
+
+Reference-style UI update: the title is now **Predictor**. The three-tab main layout matches the provided references, including the compact sidebar, Show base control, colored footer and expanded Trade layout. Advanced controls and the hive-offset browser are available in the top-right **···** menu.
