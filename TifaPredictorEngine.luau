@@ -237,6 +237,29 @@ function Engine.OffsetOutcomes(data,waxName,predicate,options)
         WaxSuccessRate=wax.SuccessRate or 1,DestroyOnFailure=wax.DestroyOnFail==true}
 end
 
+-- Compact hive-offset browser: the current item plus explicit post-reset RC scenarios.
+function Engine.HiveOffsetOutcomes(data,waxName,firstOffset,count,options)
+    assert(type(firstOffset)=="number" and firstOffset%1==0 and firstOffset>=0,"Invalid reset offset")
+    assert(type(count)=="number" and count%1==0 and count>=1 and count<=64,"Choose 1..64 offsets")
+    assert(firstOffset+count-1<=100000,"Offset range exceeds 100000")
+    options=table.clone(options or {})
+    options.ShowBase=false;options.ResetWaxes=false;options.UseOriginalSeed=false;options.BaseOffset=0
+    local file=detached(data,options)
+    local rows={}
+    if #(file.W or {})<5 then
+        rows[#rows+1]={Kind="Current",Offset=file.RC or 0,Outcomes=Engine.OffsetOutcomes(file,waxName,nil,options)}
+    end
+    for rc=firstOffset,firstOffset+count-1 do
+        if options.Cancelled and options.Cancelled() then error("Prediction cancelled",0) end
+        local reset=clone(file)
+        reset.W=nil;reset.S=reset.OS or reset.S;reset.RC=rc
+        rows[#rows+1]={Kind="Reset scenario",Offset=rc,
+            Outcomes=Engine.OffsetOutcomes(reset,waxName,nil,options)}
+        if options.OnStage then options.OnStage("Hive offsets: "..(rc-firstOffset+1).."/"..count) end
+    end
+    return {Rows=rows,CurrentOffset=file.RC or 0,CumulativeAttempts=file.UC,FirstOffset=firstOffset,Count=count}
+end
+
 -- Exact batch search. Equivalent RNG/count/value states are merged with integer
 -- multiplicities; no samples or guessed probabilities are used.
 function Engine.Batch(data, chain, predicate, groupBy, options)

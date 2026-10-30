@@ -34,3 +34,5 @@ The main loader is updated with each completed change. Use this repository’s m
 Latest update: native inspector auto-selection, next-wax offset matches sorted nearest first, and exact streaming fallback for large search frontiers. See TifaPredictor-GUI-README.md for offset semantics and validation limits.
 
 Offset investigation: see [Beequip-offset-findings.md](Beequip-offset-findings.md). Explore includes per-branch RNG trace positions and full results; single-finisher Guide plans include target results at reachable reset offsets.
+
+Current GUIDE UI: a simple offset-to-hive-bonus browser. Choose wax, FROM RC and COUNT, then SHOW; no target filters or route recommendations are required. ADD now works from both SINGLE and BATCH; native RC stays visible in the header. See the GUI README for current behavior.
