@@ -233,7 +233,7 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
     local started,lastYield=os.clock(),os.clock()
     local function checkpoint()
         if options.Cancelled and options.Cancelled() then error("Prediction cancelled",0) end
-        if os.clock()-started>(options.MaxSeconds or 120) then error("Search time limit reached; shorten the chain or increase MaxSeconds",0) end
+        if os.clock()-started>(options.MaxSeconds or 600) then error("Search time limit reached; shorten the chain or increase MaxSeconds",0) end
         if os.clock()-lastYield>=0.012 then task.wait();lastYield=os.clock() end
     end
     local function applyWax(state,wax,skip,appendPath)
@@ -263,6 +263,8 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
         return table.concat(parts,",")
     end
     local states={initial}
+    local memoryFallback={}
+    local mergedOK,mergeError=pcall(function()
     for depth,wax in ipairs(waxes) do
         local merged,nextStates={},{}
         for index,state in ipairs(states) do
@@ -275,10 +277,16 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
                 checkpoint()
             end
             if options.OnStage and index%64==0 then options.OnStage(string.format("Wax %d/%d: %d/%d states",depth,#chain,index,#states)) end
-            assert(#nextStates<=(options.MaxStates or 200000),"Exact-state memory limit reached; shorten the chain")
+            if #nextStates>(options.MaxStates or 50000) then error(memoryFallback,0) end
         end
         states=nextStates
         if options.OnStage then options.OnStage(string.format("Wax %d/%d: %d distinct states",depth,#chain,#states)) end
+    end
+    end)
+    if not mergedOK and mergeError~=memoryFallback then error(mergeError,0) end
+    if not mergedOK then
+        states=nil
+        if options.OnStage then options.OnStage("Streaming exact search · bounded frontier · STOP available") end
     end
     local function finish(state)
         local bee,hive,abilities,added=clone(baseBee),clone(baseHive),clone(baseAbilities),table.clone(baseAdded)
@@ -309,8 +317,8 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
     end
     local before=snapshot(file)
     local report={Total=total,Evaluated=0,Matched=0,Groups={},Examples={},AllWaxesSuccessRate=allSuccess,
-        ConditionalOnAllSuccess=true,DistinctStates=#states,Before=before,ResetFirst=options.ResetWaxes==true}
-    for _,state in ipairs(states) do
+        ConditionalOnAllSuccess=true,DistinctStates=states and #states or 0,Streaming=not mergedOK,Before=before,ResetFirst=options.ResetWaxes==true}
+    local function consume(state)
         local result=finish(state)
         report.Evaluated+=state.Weight
         if not predicate or predicate(result,before,state.Weight) then
@@ -322,6 +330,16 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
             end
         end
         checkpoint()
+    end
+    if states then
+        for _,state in ipairs(states) do consume(state) end
+    else
+        -- Re-enumerate from the root with only one live path per depth.
+        local function visit(state,depth)
+            if depth>#waxes then consume(state);return end
+            for skip=1,32 do visit(applyWax(state,waxes[depth],skip,true),depth+1);checkpoint() end
+        end
+        visit(initial,1)
     end
     assert(report.Evaluated==total,"Exact branch count mismatch")
     report.ConditionalMatchRate=report.Matched/total
@@ -414,7 +432,7 @@ function Engine.Inventory()
             T = file.T, Q = file.Q, S = file.S, OS = file.OS,
             RC = file.RC, UC = file.UC, W = clone(file.W)}}
     end
-    for _, location in ipairs({"Storage", "Inbox", "Permanents"}) do
+    for _, location in ipairs({"Storage", "Inbox"}) do
         for index, file in ipairs(stats and stats.Beequips and stats.Beequips[location] or {}) do
             add(location, index, file)
         end

@@ -9,7 +9,7 @@ Run TifaPredictor.luau directly in Madium with Bee Swarm Simulator loaded. The f
 3. The adjacent arrows choose WAX COUNT (1–5). SINGLE searches that many repetitions of the selected wax. In BATCH, ADD inserts that quantity into a mixed chain; REM removes its last entry and CLR clears it.
 4. Select the stat improvements to count. ANY selected improvement qualifies as a match. No filters lists every resulting stat combination.
 5. Leave RESET FIRST off to keep existing wax history. Turn it on only to simulate Turpentine: the copy’s wax history is cleared and RC becomes the stored total-upgrade count UC. The physical item stays unchanged. A full 5/5 item has no free slots without a hypothetical reset.
-6. START performs the exact search. STOP cancels. Time/memory limits produce SEARCH INCOMPLETE, with no fabricated percentages.
+6. START performs the exact search. STOP cancels. Large frontiers switch to a bounded-frontier exact streaming search. This can take longer. STOP cancels; the ten-minute time limit produces SEARCH INCOMPLETE without partial percentages.
 7. COPY REPORT copies the complete plain-text report, including groups beyond the on-screen display limit. VIEW CURRENT STATS is available outside Batch. The question-mark button explains the workflow in the UI.
 
 ## Report and probabilities
@@ -27,7 +27,7 @@ Offset after turp is the absolute draw count after base Bee/hive stats plus the 
 Current offset is the absolute draw count after full generation, including upgrades and ability pools.
 These values are instrumented RNG-call counts. Their conversion to Greg’s particular labels remains unverified; matching report headings does not establish identical semantics.
 
-EXPLORE now scans pre-generation base offsets on detached unwaxed copies. ZOOM IN imports that copied state. Show base affects the left display only; it does not secretly reset prediction history. The current/original seed toggle selects known S or OS values. Unknown future Swirled seeds are not predicted.
+EXPLORE searches the 32 legal RNG skips for one next successful application of the selected wax. Existing history is preserved unless reset is enabled. ALL selected targets must improve. Results are sorted by skip 1 through 32 and include the final RNG draw count. These skips are possible branches, not guaranteed controllable offsets. Wax count is used by SINGLE/BATCH; EXPLORE always checks the next wax. Show base affects the left display only; it does not secretly reset prediction history. The current/original seed toggle selects known S or OS values. Unknown future Swirled seeds are not predicted.
 
 ## Validation
 
@@ -59,3 +59,9 @@ GUIDE: select desired ability/stat filters, choose the finishing wax, and press 
 Chains are ranked by target-and-survival probability. Non-destructive Hard failures are included; destructive failures count as misses. The copied guide includes conditional target chance given survival as well as overall chance. Soft is not assumed to improve the result: it advances the seeded RNG and changes upgrades/pools, and the effect is calculated for the selected item.
 
 The guide does not reveal or guarantee the next server skip. A test of a Bottle Cap fixture independently verified all three eligible Caustic-finishing chains, including the Hard-failure mixture; the input stayed unchanged. Live GUI tests verified Guide, Options, rounded screen percentages, exact copied values, and removal of Method text.
+
+## Native selection
+
+Permanents is removed. Selecting a different Beequip in the native Case, Storage or Inbox inspector selects it in Tifa. The trade item inspector is observed the same way; its selected Beequip appears in the Trade source. Observers pause selection changes while a search is running. No game functions are replaced and no inventory or trade remotes are sent. Trade wiring has been inspected but not tested in an active player trade.
+
+Streaming fallback was compared against merged searches for 1,024 branches on Bottle Cap, Whistle, Paperclip and Kazoo. Another 96 next-wax offset results matched direct history evaluation; cancellation was checked in Madium.

@@ -235,7 +235,7 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
     local started,lastYield=os.clock(),os.clock()
     local function checkpoint()
         if options.Cancelled and options.Cancelled() then error("Prediction cancelled",0) end
-        if os.clock()-started>(options.MaxSeconds or 120) then error("Search time limit reached; shorten the chain or increase MaxSeconds",0) end
+        if os.clock()-started>(options.MaxSeconds or 600) then error("Search time limit reached; shorten the chain or increase MaxSeconds",0) end
         if os.clock()-lastYield>=0.012 then task.wait();lastYield=os.clock() end
     end
     local function applyWax(state,wax,skip,appendPath)
@@ -265,6 +265,8 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
         return table.concat(parts,",")
     end
     local states={initial}
+    local memoryFallback={}
+    local mergedOK,mergeError=pcall(function()
     for depth,wax in ipairs(waxes) do
         local merged,nextStates={},{}
         for index,state in ipairs(states) do
@@ -277,10 +279,16 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
                 checkpoint()
             end
             if options.OnStage and index%64==0 then options.OnStage(string.format("Wax %d/%d: %d/%d states",depth,#chain,index,#states)) end
-            assert(#nextStates<=(options.MaxStates or 200000),"Exact-state memory limit reached; shorten the chain")
+            if #nextStates>(options.MaxStates or 50000) then error(memoryFallback,0) end
         end
         states=nextStates
         if options.OnStage then options.OnStage(string.format("Wax %d/%d: %d distinct states",depth,#chain,#states)) end
+    end
+    end)
+    if not mergedOK and mergeError~=memoryFallback then error(mergeError,0) end
+    if not mergedOK then
+        states=nil
+        if options.OnStage then options.OnStage("Streaming exact search · bounded frontier · STOP available") end
     end
     local function finish(state)
         local bee,hive,abilities,added=clone(baseBee),clone(baseHive),clone(baseAbilities),table.clone(baseAdded)
@@ -311,8 +319,8 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
     end
     local before=snapshot(file)
     local report={Total=total,Evaluated=0,Matched=0,Groups={},Examples={},AllWaxesSuccessRate=allSuccess,
-        ConditionalOnAllSuccess=true,DistinctStates=#states,Before=before,ResetFirst=options.ResetWaxes==true}
-    for _,state in ipairs(states) do
+        ConditionalOnAllSuccess=true,DistinctStates=states and #states or 0,Streaming=not mergedOK,Before=before,ResetFirst=options.ResetWaxes==true}
+    local function consume(state)
         local result=finish(state)
         report.Evaluated+=state.Weight
         if not predicate or predicate(result,before,state.Weight) then
@@ -324,6 +332,16 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
             end
         end
         checkpoint()
+    end
+    if states then
+        for _,state in ipairs(states) do consume(state) end
+    else
+        -- Re-enumerate from the root with only one live path per depth.
+        local function visit(state,depth)
+            if depth>#waxes then consume(state);return end
+            for skip=1,32 do visit(applyWax(state,waxes[depth],skip,true),depth+1);checkpoint() end
+        end
+        visit(initial,1)
     end
     assert(report.Evaluated==total,"Exact branch count mismatch")
     report.ConditionalMatchRate=report.Matched/total
@@ -416,7 +434,7 @@ function Engine.Inventory()
             T = file.T, Q = file.Q, S = file.S, OS = file.OS,
             RC = file.RC, UC = file.UC, W = clone(file.W)}}
     end
-    for _, location in ipairs({"Storage", "Inbox", "Permanents"}) do
+    for _, location in ipairs({"Storage", "Inbox"}) do
         for index, file in ipairs(stats and stats.Beequips and stats.Beequips[location] or {}) do
             add(location, index, file)
         end
@@ -767,6 +785,8 @@ local function reloadItems()
     state.items={}
     if state.source=="Import" then
         if state.imported then state.items[1]={Location="Import",Index=1,Data=state.imported} end
+    elseif state.source=="Trade" then
+        state.items=state.tradeItems or {}
     else
         for _,item in ipairs(E.Inventory()) do if item.Location==state.source then state.items[#state.items+1]=item end end
     end
@@ -778,8 +798,8 @@ local function redraw()
     local explore=state.tab=="EXPLORE";local batch=state.tab=="BATCH";local guide=state.tab=="GUIDE"
     chainLabel.Visible=batch;add.Visible=batch;remove.Visible=batch;clear.Visible=batch;copy.Visible=not explore
     viewStats.Visible=not batch and not guide
-    stepsLabel.Visible=explore;steps.Visible=explore;offsetLabel.Visible=explore;offset.Visible=explore
-    zoom.Visible=explore;seed.Visible=true;copyExplore.Visible=explore
+    stepsLabel.Visible=false;steps.Visible=false;offsetLabel.Visible=false;offset.Visible=false
+    zoom.Visible=false;seed.Visible=true;copyExplore.Visible=explore
     if not batch and not explore and not guide then chainLabel.Visible=true;chainLabel.Text="Choose wax and count, then START" end
     resetFirst.Visible=true
     resetFirst.Text=(state.resetFirst and "●" or "○").." Reset before search"
@@ -791,7 +811,7 @@ local function redraw()
     planningSummary.TextColor3=state.resetFirst and C.green or C.muted
     skipTrack.Visible=not guide;skipPrev.Visible=not guide;skip.Visible=not guide;skipNext.Visible=not guide
     window.WaxQuantityCaption.Visible=not guide
-    filterHeading.Text=guide and "TARGETS (ALL)" or "FILTERS (ANY)"
+    filterHeading.Text=(guide or explore) and "TARGETS (ALL)" or "FILTERS (ANY)"
     if guide then chainLabel.Visible=true;chainLabel.Text="Choose targets + finishing wax, then COMPARE" end
     if not state.busy then start.Text=guide and "COMPARE" or "START" end
     if explore then
@@ -877,7 +897,7 @@ local function openSelector(kind,x,width,entries,choose)
 end
 connect(source.Activated,function()
     if not editable() then return end
-    openSelector("Source",10,140,{"Storage","Case","Inbox","Permanents","Import"},function(entry)
+    openSelector("Source",10,140,{"Storage","Case","Inbox","Trade","Import"},function(entry)
         state.source=entry;state.index=1;reloadItems();setResults("Choose filters or press START.")
     end)
 end)
@@ -1081,19 +1101,28 @@ connect(start.Activated,function()
                 lines[#lines+1]="No guaranteed offset sequence. No real wax used."
                 setResults(table.concat(lines,"\n"))
             else
-                local count=number(steps.Text,1,1000,"Steps");local base=number(offset.Text,0,100000,"Offset")
-                assert(base+count-1<=100000,"Explore range exceeds 100000")
-                local lines={"UNWAXED BASE-OFFSET EXPLORER","Skips are applied before base stat generation.",""}
-                local before=E.Evaluate(item.Data,opts);local matches=0
-                for i=0,count-1 do
+                -- Only the 32 legal skips for the next successful wax are searched.
+                -- Preserve the selected item's wax history and compare with its current stats.
+                local before=E.Evaluate(item.Data,opts)
+                local lines={"NEXT WAX OFFSET MATCHES",state.wax,"Successful-wax skips, nearest to farthest.","Existing waxes are preserved unless reset is enabled.",""}
+                local matches=0
+                for skipValue=1,32 do
                     if opts.Cancelled() then error("Prediction cancelled",0) end
-                    local o=options();o.ShowBase=true;o.ResetWaxes=false;o.BaseOffset=base+i
-                    local result=E.Evaluate(item.Data,o);local match=#chosen==0
-                    for _,f in ipairs(chosen) do if statValue(result,f)>statValue(before,f)+1e-9 then match=true end end
-                    if match then matches+=1;lines[#lines+1]="OFFSET "..(base+i).."\n"..describe(result).."\n" end
-                    if i%16==0 then opts.OnProgress(i+1,count);task.wait() end
+                    local result=E.Single(item.Data,state.wax,skipValue,opts)
+                    local match=true
+                    for _,f in ipairs(chosen) do
+                        if statValue(result,f)<=statValue(before,f)+1e-9 then match=false;break end
+                    end
+                    if match then
+                        matches+=1
+                        lines[#lines+1]="SKIP +"..skipValue.." · FINAL RNG OFFSET "..result.CurrentOffset
+                        lines[#lines+1]=describe(result).."\n"
+                    end
+                    task.wait()
                 end
-                table.insert(lines,1,"Matches: "..matches.." / "..count);setResults(table.concat(lines,"\n"))
+                table.insert(lines,1,"Matches: "..matches.." / 32")
+                lines[#lines+1]="Offsets are RNG skips, not a guaranteed sequence you can force. Wax success is separate."
+                setResults(table.concat(lines,"\n"))
             end
         end,function(e)return tostring(e)end)
         state.busy=false
@@ -1128,5 +1157,48 @@ local function destroy()
 end
 connect(close.Activated,destroy)
 getgenv().TifaPredictorUI={Destroy=destroy,GetReport=function()return state.result end}
+-- Observe native inspectors without replacing game functions or changing inventory.
+local function selectNative(file,location)
+    if state.busy or type(file)~="table" or not file.T then return end
+    local data={T=file.T,Q=file.Q,S=file.S,OS=file.OS,RC=file.RC,UC=file.UC,W={}}
+    for i,w in ipairs(file.W or {}) do data.W[i]=table.clone(w) end
+    local function same(a,b) return a.T==b.T and a.S==b.S and a.Q==b.Q end
+    state.source=location;state.index=1
+    if location=="Trade" then state.tradeItems={{Location="Trade",Index=1,Data=data}} end
+    reloadItems()
+    local found=false
+    for i,item in ipairs(state.items) do if same(item.Data,data) then state.index=i;found=true;break end end
+    if not found then state.items[#state.items+1]={Location=location,Index=#state.items+1,Data=data};state.index=#state.items end
+    changed();redraw();notify("Selected from "..location..": "..data.T)
+end
+local managerOK,manager=pcall(require,RS.Gui.BeequipMenus.BeequipMenuManager)
+local tradeOK,trade=pcall(require,RS.Gui.TradeGui)
+local observed={}
+task.spawn(function()
+    while state.alive do
+        pcall(function()
+            if managerOK then
+                for _,location in ipairs({"Case","Storage","Inbox"}) do
+                    local menu=manager.GetByName("Beequip "..location)
+                    local file=menu and menu.BeequipInspector and menu.BeequipInspector.BeequipFile
+                    if observed[location]~=file then
+                        observed[location]=file
+                        if file then selectNative(file,location) end
+                    end
+                end
+            end
+            if tradeOK then
+                local inspector=trade.GetItemInspector()
+                local item=inspector and inspector.Tradable
+                if observed.Trade~=item then
+                    observed.Trade=item
+                    local pack=item and item.Pack
+                    if pack and pack.Category=="Beequip" then selectNative(pack.File,"Trade") end
+                end
+            end
+        end)
+        task.wait(0.15)
+    end
+end)
 reloadItems();redraw()
 return "Tifa's Predictor GUI ready"

@@ -13,7 +13,7 @@ Run inside the supported game/executor context. The query parameter helps avoid 
 ## Features
 
 - Clickable Beequip cards with native game icons, potential and wax-history slots.
-- Storage/Case/Inbox/Permanents sources and detached JSON import.
+- Storage/Case/Inbox/Trade sources and detached JSON import.
 - Soft, Hard, Caustic and hypothetical Debug wax selection.
 - Exact weighted batch counts, most-likely-first outcome groups, percentages and full plain-text report copying.
 - Existing wax history preserved unless RESET FIRST is explicitly enabled for a simulated reset.
@@ -30,3 +30,5 @@ The module uses the game’s replicated item definitions. Offset counters are in
 See [the GUI guide](TifaPredictor-GUI-README.md) for controls, semantics and tests. Game images are referenced by the client’s BeequipTypes and WaxTypes definitions; image files are not redistributed here.
 
 The main loader is updated with each completed change. Use this repository’s main URL for future updates rather than an old commit-pinned URL.
+
+Latest update: native inspector auto-selection, next-wax offset matches sorted nearest first, and exact streaming fallback for large search frontiers. See TifaPredictor-GUI-README.md for offset semantics and validation limits.
