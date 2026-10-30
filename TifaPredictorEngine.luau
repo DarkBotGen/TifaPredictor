@@ -219,6 +219,7 @@ function Engine.OffsetOutcomes(data,waxName,predicate,options)
     local before=Engine.Evaluate(data,options)
     local wax=waxDefinition(waxName)
     local rows,byFinal,matched={},{},0
+    local lastYield=os.clock()
     for skip=1,32 do
         if options.Cancelled and options.Cancelled() then error("Prediction cancelled",0) end
         local result=Engine.Single(data,waxName,skip,options)
@@ -229,9 +230,12 @@ function Engine.OffsetOutcomes(data,waxName,predicate,options)
         rows[#rows+1]=row
         local bucket=byFinal[row.FinalOffset] or {};byFinal[row.FinalOffset]=bucket
         bucket[#bucket+1]=row
-        if options.OnProgress then options.OnProgress(skip,32) end
-        task.wait()
+        if os.clock()-lastYield>=0.008 then
+            if options.OnProgress then options.OnProgress(skip,32) end
+            task.wait();lastYield=os.clock()
+        end
     end
+    if options.OnProgress then options.OnProgress(32,32) end
     return {Before=before,Rows=rows,ByFinalOffset=byFinal,Matched=matched,Total=32,
         ConditionalMatchRate=matched/32,SuccessAndMatchRate=(wax.SuccessRate or 1)*matched/32,
         WaxSuccessRate=wax.SuccessRate or 1,DestroyOnFailure=wax.DestroyOnFail==true}
@@ -246,6 +250,7 @@ function Engine.HiveOffsetOutcomes(data,waxName,firstOffset,count,options)
     options.ShowBase=false;options.ResetWaxes=false;options.UseOriginalSeed=false;options.BaseOffset=0
     local file=detached(data,options)
     local rows={}
+    local lastYield=os.clock()
     if #(file.W or {})<5 then
         rows[#rows+1]={Kind="Current",Offset=file.RC or 0,Outcomes=Engine.OffsetOutcomes(file,waxName,nil,options)}
     end
@@ -256,6 +261,7 @@ function Engine.HiveOffsetOutcomes(data,waxName,firstOffset,count,options)
         rows[#rows+1]={Kind="Reset scenario",Offset=rc,
             Outcomes=Engine.OffsetOutcomes(reset,waxName,nil,options)}
         if options.OnStage then options.OnStage("Hive offsets: "..(rc-firstOffset+1).."/"..count) end
+        if os.clock()-lastYield>=0.008 then task.wait();lastYield=os.clock() end
     end
     return {Rows=rows,CurrentOffset=file.RC or 0,CumulativeAttempts=file.UC,FirstOffset=firstOffset,Count=count}
 end
@@ -290,42 +296,113 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
     end
     local upgrades,weights,keys={},{},{}
     for i,v in ipairs(def.Upgrades or {}) do upgrades[i]=v;weights[i]=resolve(v.Chance) or 0;keys[i]=tag(v) end
+    -- Optional exact projection: callers promise predicates/groups inspect only Targets.
+    -- All upgrade counts remain in the key because they alter future upgrade pools.
+    -- Ability upgrade values remain too, preserving late pool-roll behavior.
+    local retained
+    if options.Targets and #options.Targets>0 then
+        retained={}
+        local wanted={}
+        for _,f in ipairs(options.Targets) do
+            if f.kind=="Bee" then wanted[tag({BeeStat=f.name})]=true
+            elseif f.kind=="Hive" then wanted[tag({HiveBonusStat=f.name,Op=f.op or "Add",Params=f.params})]=true end
+        end
+        for i,u in ipairs(upgrades) do retained[i]=wanted[keys[i]] or u.BeeAbility~=nil or u.BeeAbilityPool~=nil end
+    end
     local initial={Rng=rng,Draws=draws,Counts={},Values={},Weight=1,Path={}}
     for i=1,#upgrades do initial.Counts[i]=0;initial.Values[i]=0 end
     local started,lastYield=os.clock(),os.clock()
+    local progressDone,progressTick=0,0
+    local checkTicks=0
     local function checkpoint()
+        checkTicks+=1
+        if checkTicks~=1 and checkTicks%64~=0 then return end
         if options.Cancelled and options.Cancelled() then error("Prediction cancelled",0) end
         if os.clock()-started>(options.MaxSeconds or 600) then error("Search time limit reached; shorten the chain or increase MaxSeconds",0) end
         if os.clock()-lastYield>=0.012 then task.wait();lastYield=os.clock() end
     end
-    local function applyWax(state,wax,skip,appendPath)
-        local child={Rng=state.Rng:Clone(),Draws=state.Draws,Counts=table.clone(state.Counts),
-            Values=table.clone(state.Values),Weight=state.Weight,Path=table.clone(state.Path)}
-        if appendPath then child.Path[#child.Path+1]=skip end
-        if #upgrades==0 then return child end
-        local function draw() child.Draws+=1;return child.Rng:NextNumber() end
-        for _=1,skip or 0 do draw() end
-        for _=1,wax.Upgrades or 0 do
-            local pool={}
-            local special=wax.Name=="Caustic" or wax.Name=="Debug"
-            for i,u in ipairs(upgrades) do
-                if child.Counts[i]<u.Max and (special or not u.CausticOnly) then pool[#pool+1]={i,weights[i]} end
+    -- RNG transitions depend on draw position and upgrade counts, not accrued values.
+    -- Keep a bounded cache; replay ordered increments to preserve floating-point addition.
+    local transitionCache,transitionKeys={},{}
+    local transitionLimit=options.TransitionCacheSize or 512
+    local cacheCursor=1
+    local cacheHits,cacheMisses=0,0
+    local function transitions(state,wax)
+        local key=tostring(wax.ID)..":"..state.Draws..":"..table.concat(state.Counts,",")
+        local cached=transitionCache[key]
+        if cached then cacheHits+=1;return cached end
+        cacheMisses+=1
+        local result={}
+        local skippedRng=state.Rng:Clone()
+        for skip=1,32 do
+            skippedRng:NextNumber()
+            local child={Rng=skippedRng:Clone(),Draws=state.Draws+skip,Counts=table.clone(state.Counts),Deltas={}}
+            local function draw() child.Draws+=1;return child.Rng:NextNumber() end
+            for _=1,wax.Upgrades or 0 do
+                local pool={}
+                local special=wax.Name=="Caustic" or wax.Name=="Debug"
+                for i,u in ipairs(upgrades) do
+                    if child.Counts[i]<u.Max and (special or not u.CausticOnly) then pool[#pool+1]={i,weights[i]} end
+                end
+                assert(#pool>0,"Upgrade pool exhausted")
+                local i=RandomPools.SelectFromOrderedList(pool,draw)
+                local value=RQValue.Resolve(upgrades[i].Value,file.Q,draw,def.OldRNG)
+                child.Deltas[#child.Deltas+1]={i,value}
+                child.Counts[i]+=1
             end
-            assert(#pool>0,"Upgrade pool exhausted")
-            local i=RandomPools.SelectFromOrderedList(pool,draw)
-            child.Values[i]+=RQValue.Resolve(upgrades[i].Value,file.Q,draw,def.OldRNG)
-            child.Counts[i]+=1
+            result[skip]=child
+        end
+        if transitionLimit>0 then
+            if #transitionKeys<transitionLimit then transitionKeys[#transitionKeys+1]=key
+            else
+                transitionCache[transitionKeys[cacheCursor]]=nil
+                transitionKeys[cacheCursor]=key
+                cacheCursor=cacheCursor%transitionLimit+1
+            end
+            transitionCache[key]=result
+        end
+        return result
+    end
+    local function applyWax(state,wax,skip,appendPath)
+        local child={Values=table.clone(state.Values),Weight=state.Weight,Path=table.clone(state.Path)}
+        if appendPath then child.Path[#child.Path+1]=skip end
+        if #upgrades==0 then
+            child.Rng=state.Rng;child.Draws=state.Draws;child.Counts=state.Counts
+            return child
+        end
+        if skip and skip>=1 then
+            local tr=transitions(state,wax)[skip]
+            child.Rng=tr.Rng;child.Draws=tr.Draws;child.Counts=tr.Counts
+            for _,delta in ipairs(tr.Deltas) do child.Values[delta[1]]+=delta[2] end
+        else
+            -- Legacy histories can store a zero skip. Preserve their exact replay.
+            child.Rng=state.Rng:Clone();child.Draws=state.Draws;child.Counts=table.clone(state.Counts)
+            local function draw() child.Draws+=1;return child.Rng:NextNumber() end
+            for _=1,wax.Upgrades or 0 do
+                local pool={}
+                for i,u in ipairs(upgrades) do
+                    if child.Counts[i]<u.Max and (wax.Name=="Caustic" or wax.Name=="Debug" or not u.CausticOnly) then pool[#pool+1]={i,weights[i]} end
+                end
+                assert(#pool>0,"Upgrade pool exhausted")
+                local i=RandomPools.SelectFromOrderedList(pool,draw)
+                child.Values[i]+=RQValue.Resolve(upgrades[i].Value,file.Q,draw,def.OldRNG)
+                child.Counts[i]+=1
+            end
         end
         return child
     end
     for _,w in ipairs(file.W) do if w[2] then initial=applyWax(initial,WaxTypes.TypeByID[w[1]],w[3] or 0,false) end end
     local function stateKey(state)
         local parts={tostring(state.Draws)}
-        for i=1,#upgrades do parts[#parts+1]=tostring(state.Counts[i]);parts[#parts+1]=string.format("%.17g",state.Values[i]) end
+        for i=1,#upgrades do
+            parts[#parts+1]=tostring(state.Counts[i])
+            if not retained or retained[i] then parts[#parts+1]=string.format("%.17g",state.Values[i]) end
+        end
         return table.concat(parts,",")
     end
     local states={initial}
     local memoryFallback={}
+    local fallbackDepth
     local mergedOK,mergeError=pcall(function()
     for depth,wax in ipairs(waxes) do
         local merged,nextStates={},{}
@@ -339,7 +416,7 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
                 checkpoint()
             end
             if options.OnStage and index%64==0 then options.OnStage(string.format("Wax %d/%d: %d/%d states",depth,#chain,index,#states)) end
-            if #nextStates>(options.MaxStates or 50000) then error(memoryFallback,0) end
+            if #nextStates>(options.MaxStates or 50000) then fallbackDepth=depth;error(memoryFallback,0) end
         end
         states=nextStates
         if options.OnStage then options.OnStage(string.format("Wax %d/%d: %d distinct states",depth,#chain,#states)) end
@@ -347,8 +424,8 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
     end)
     if not mergedOK and mergeError~=memoryFallback then error(mergeError,0) end
     if not mergedOK then
-        states=nil
-        if options.OnStage then options.OnStage("Streaming exact search · bounded frontier · STOP available") end
+        -- Keep the completed merged prefix. Discard only the unfinished next layer.
+        if options.OnStage then options.OnStage("Counting remaining outcomes · keeping completed work") end
     end
     local function finish(state)
         local bee,hive,abilities,added=clone(baseBee),clone(baseHive),clone(baseAbilities),table.clone(baseAdded)
@@ -379,7 +456,7 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
     end
     local before=snapshot(file)
     local report={Total=total,Evaluated=0,Matched=0,Groups={},Examples={},AllWaxesSuccessRate=allSuccess,
-        ConditionalOnAllSuccess=true,DistinctStates=states and #states or 0,Streaming=not mergedOK,Before=before,ResetFirst=options.ResetWaxes==true}
+        ConditionalOnAllSuccess=true,TargetProjection=retained~=nil,DistinctStates=#states,Streaming=not mergedOK,Before=before,ResetFirst=options.ResetWaxes==true}
     local function consume(state)
         local result=finish(state)
         report.Evaluated+=state.Weight
@@ -391,21 +468,40 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
                 if not report.Examples[key] then report.Examples[key]={FutureSkips=clone(state.Path),CurrentOffset=result.CurrentOffset} end
             end
         end
+        progressDone+=state.Weight
+        if options.OnProgress and os.clock()-progressTick>=0.25 then
+            progressTick=os.clock();options.OnProgress(progressDone,total,os.clock()-started)
+        end
         checkpoint()
     end
-    if states then
+    if mergedOK then
         for _,state in ipairs(states) do consume(state) end
     else
-        -- Re-enumerate from the root with only one live path per depth.
+        -- Merge terminal states in bounded chunks before formatting snapshots.
+        -- Weights remain integers; flushing does not discard or sample any path.
+        local pending,pendingList={},{}
+        local function flush()
+            for _,state in ipairs(pendingList) do consume(state) end
+            pending={};pendingList={}
+        end
         local function visit(state,depth)
-            if depth>#waxes then consume(state);return end
+            if depth>#waxes then
+                local key=stateKey(state)
+                local prior=pending[key]
+                if prior then prior.Weight+=state.Weight
+                else pending[key]=state;pendingList[#pendingList+1]=state end
+                if #pendingList>=(options.TerminalMergeSize or 8192) then flush() end
+                return
+            end
             for skip=1,32 do visit(applyWax(state,waxes[depth],skip,true),depth+1);checkpoint() end
         end
-        visit(initial,1)
+        for _,state in ipairs(states) do visit(state,fallbackDepth) end
+        flush()
     end
     assert(report.Evaluated==total,"Exact branch count mismatch")
     report.ConditionalMatchRate=report.Matched/total
     report.SuccessAndMatchRate=allSuccess*report.ConditionalMatchRate
+    report.TransitionCacheHits=cacheHits;report.TransitionCacheMisses=cacheMisses
     report.Seconds=os.clock()-started
     if options.OnProgress then options.OnProgress(total,total) end
     return report

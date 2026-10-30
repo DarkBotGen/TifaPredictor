@@ -1,5 +1,11 @@
 # Predictor GUI
 
+## Current optimized interface
+
+Explore is now **NEXT WAX** and automatically checks all 32 possible successful rolls; the range/zoom fields are removed. The visible Turpentine toggle is **After Turp**. Select desired improvements before searching to enable faster exact target searches. Plans show wax success and destruction risk. Progress includes elapsed time, counting progress and STOP. Repeating an unchanged search reuses its exact result. Screen output is limited to 400 lines; COPY retains everything.
+
+See [Optimization-notes.md](Optimization-notes.md) for current behavior, benchmark conditions, limits and regression checks. This update supersedes the older Explore-footer and timing descriptions below. Advanced offset scenarios remain under the top-right menu.
+
 Run TifaPredictor.luau in the supported Bee Swarm Simulator executor context. It simulates detached item data and never applies wax or sends inventory/trade remotes.
 
 ## Additional wax simulations

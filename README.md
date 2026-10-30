@@ -2,6 +2,10 @@
 
 Readable Bee Swarm Simulator Beequip prediction simulator with a dark GUI and image inventory sidebar.
 
+Latest optimization: **NEXT WAX** replaces Explore's range/zoom controls; **After Turp** remains visible. Select desired improvements for a faster exact search. Plans show success/destruction risk, searches show progress and STOP, and unchanged repeat searches reuse their exact result.
+
+Measured fixture: four Caustics with all outcomes improved from 52.5 to 26.2 seconds; five Caustics with Critical Chance selected finished in 22.8 seconds. Results vary by Beequip, targets and runtime load. See [optimization details and validation](Optimization-notes.md); these notes supersede older interface descriptions below.
+
 ## Run the latest version
 
 ```lua

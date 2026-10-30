@@ -221,6 +221,7 @@ function Engine.OffsetOutcomes(data,waxName,predicate,options)
     local before=Engine.Evaluate(data,options)
     local wax=waxDefinition(waxName)
     local rows,byFinal,matched={},{},0
+    local lastYield=os.clock()
     for skip=1,32 do
         if options.Cancelled and options.Cancelled() then error("Prediction cancelled",0) end
         local result=Engine.Single(data,waxName,skip,options)
@@ -231,9 +232,12 @@ function Engine.OffsetOutcomes(data,waxName,predicate,options)
         rows[#rows+1]=row
         local bucket=byFinal[row.FinalOffset] or {};byFinal[row.FinalOffset]=bucket
         bucket[#bucket+1]=row
-        if options.OnProgress then options.OnProgress(skip,32) end
-        task.wait()
+        if os.clock()-lastYield>=0.008 then
+            if options.OnProgress then options.OnProgress(skip,32) end
+            task.wait();lastYield=os.clock()
+        end
     end
+    if options.OnProgress then options.OnProgress(32,32) end
     return {Before=before,Rows=rows,ByFinalOffset=byFinal,Matched=matched,Total=32,
         ConditionalMatchRate=matched/32,SuccessAndMatchRate=(wax.SuccessRate or 1)*matched/32,
         WaxSuccessRate=wax.SuccessRate or 1,DestroyOnFailure=wax.DestroyOnFail==true}
@@ -248,6 +252,7 @@ function Engine.HiveOffsetOutcomes(data,waxName,firstOffset,count,options)
     options.ShowBase=false;options.ResetWaxes=false;options.UseOriginalSeed=false;options.BaseOffset=0
     local file=detached(data,options)
     local rows={}
+    local lastYield=os.clock()
     if #(file.W or {})<5 then
         rows[#rows+1]={Kind="Current",Offset=file.RC or 0,Outcomes=Engine.OffsetOutcomes(file,waxName,nil,options)}
     end
@@ -258,6 +263,7 @@ function Engine.HiveOffsetOutcomes(data,waxName,firstOffset,count,options)
         rows[#rows+1]={Kind="Reset scenario",Offset=rc,
             Outcomes=Engine.OffsetOutcomes(reset,waxName,nil,options)}
         if options.OnStage then options.OnStage("Hive offsets: "..(rc-firstOffset+1).."/"..count) end
+        if os.clock()-lastYield>=0.008 then task.wait();lastYield=os.clock() end
     end
     return {Rows=rows,CurrentOffset=file.RC or 0,CumulativeAttempts=file.UC,FirstOffset=firstOffset,Count=count}
 end
@@ -292,42 +298,113 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
     end
     local upgrades,weights,keys={},{},{}
     for i,v in ipairs(def.Upgrades or {}) do upgrades[i]=v;weights[i]=resolve(v.Chance) or 0;keys[i]=tag(v) end
+    -- Optional exact projection: callers promise predicates/groups inspect only Targets.
+    -- All upgrade counts remain in the key because they alter future upgrade pools.
+    -- Ability upgrade values remain too, preserving late pool-roll behavior.
+    local retained
+    if options.Targets and #options.Targets>0 then
+        retained={}
+        local wanted={}
+        for _,f in ipairs(options.Targets) do
+            if f.kind=="Bee" then wanted[tag({BeeStat=f.name})]=true
+            elseif f.kind=="Hive" then wanted[tag({HiveBonusStat=f.name,Op=f.op or "Add",Params=f.params})]=true end
+        end
+        for i,u in ipairs(upgrades) do retained[i]=wanted[keys[i]] or u.BeeAbility~=nil or u.BeeAbilityPool~=nil end
+    end
     local initial={Rng=rng,Draws=draws,Counts={},Values={},Weight=1,Path={}}
     for i=1,#upgrades do initial.Counts[i]=0;initial.Values[i]=0 end
     local started,lastYield=os.clock(),os.clock()
+    local progressDone,progressTick=0,0
+    local checkTicks=0
     local function checkpoint()
+        checkTicks+=1
+        if checkTicks~=1 and checkTicks%64~=0 then return end
         if options.Cancelled and options.Cancelled() then error("Prediction cancelled",0) end
         if os.clock()-started>(options.MaxSeconds or 600) then error("Search time limit reached; shorten the chain or increase MaxSeconds",0) end
         if os.clock()-lastYield>=0.012 then task.wait();lastYield=os.clock() end
     end
-    local function applyWax(state,wax,skip,appendPath)
-        local child={Rng=state.Rng:Clone(),Draws=state.Draws,Counts=table.clone(state.Counts),
-            Values=table.clone(state.Values),Weight=state.Weight,Path=table.clone(state.Path)}
-        if appendPath then child.Path[#child.Path+1]=skip end
-        if #upgrades==0 then return child end
-        local function draw() child.Draws+=1;return child.Rng:NextNumber() end
-        for _=1,skip or 0 do draw() end
-        for _=1,wax.Upgrades or 0 do
-            local pool={}
-            local special=wax.Name=="Caustic" or wax.Name=="Debug"
-            for i,u in ipairs(upgrades) do
-                if child.Counts[i]<u.Max and (special or not u.CausticOnly) then pool[#pool+1]={i,weights[i]} end
+    -- RNG transitions depend on draw position and upgrade counts, not accrued values.
+    -- Keep a bounded cache; replay ordered increments to preserve floating-point addition.
+    local transitionCache,transitionKeys={},{}
+    local transitionLimit=options.TransitionCacheSize or 512
+    local cacheCursor=1
+    local cacheHits,cacheMisses=0,0
+    local function transitions(state,wax)
+        local key=tostring(wax.ID)..":"..state.Draws..":"..table.concat(state.Counts,",")
+        local cached=transitionCache[key]
+        if cached then cacheHits+=1;return cached end
+        cacheMisses+=1
+        local result={}
+        local skippedRng=state.Rng:Clone()
+        for skip=1,32 do
+            skippedRng:NextNumber()
+            local child={Rng=skippedRng:Clone(),Draws=state.Draws+skip,Counts=table.clone(state.Counts),Deltas={}}
+            local function draw() child.Draws+=1;return child.Rng:NextNumber() end
+            for _=1,wax.Upgrades or 0 do
+                local pool={}
+                local special=wax.Name=="Caustic" or wax.Name=="Debug"
+                for i,u in ipairs(upgrades) do
+                    if child.Counts[i]<u.Max and (special or not u.CausticOnly) then pool[#pool+1]={i,weights[i]} end
+                end
+                assert(#pool>0,"Upgrade pool exhausted")
+                local i=RandomPools.SelectFromOrderedList(pool,draw)
+                local value=RQValue.Resolve(upgrades[i].Value,file.Q,draw,def.OldRNG)
+                child.Deltas[#child.Deltas+1]={i,value}
+                child.Counts[i]+=1
             end
-            assert(#pool>0,"Upgrade pool exhausted")
-            local i=RandomPools.SelectFromOrderedList(pool,draw)
-            child.Values[i]+=RQValue.Resolve(upgrades[i].Value,file.Q,draw,def.OldRNG)
-            child.Counts[i]+=1
+            result[skip]=child
+        end
+        if transitionLimit>0 then
+            if #transitionKeys<transitionLimit then transitionKeys[#transitionKeys+1]=key
+            else
+                transitionCache[transitionKeys[cacheCursor]]=nil
+                transitionKeys[cacheCursor]=key
+                cacheCursor=cacheCursor%transitionLimit+1
+            end
+            transitionCache[key]=result
+        end
+        return result
+    end
+    local function applyWax(state,wax,skip,appendPath)
+        local child={Values=table.clone(state.Values),Weight=state.Weight,Path=table.clone(state.Path)}
+        if appendPath then child.Path[#child.Path+1]=skip end
+        if #upgrades==0 then
+            child.Rng=state.Rng;child.Draws=state.Draws;child.Counts=state.Counts
+            return child
+        end
+        if skip and skip>=1 then
+            local tr=transitions(state,wax)[skip]
+            child.Rng=tr.Rng;child.Draws=tr.Draws;child.Counts=tr.Counts
+            for _,delta in ipairs(tr.Deltas) do child.Values[delta[1]]+=delta[2] end
+        else
+            -- Legacy histories can store a zero skip. Preserve their exact replay.
+            child.Rng=state.Rng:Clone();child.Draws=state.Draws;child.Counts=table.clone(state.Counts)
+            local function draw() child.Draws+=1;return child.Rng:NextNumber() end
+            for _=1,wax.Upgrades or 0 do
+                local pool={}
+                for i,u in ipairs(upgrades) do
+                    if child.Counts[i]<u.Max and (wax.Name=="Caustic" or wax.Name=="Debug" or not u.CausticOnly) then pool[#pool+1]={i,weights[i]} end
+                end
+                assert(#pool>0,"Upgrade pool exhausted")
+                local i=RandomPools.SelectFromOrderedList(pool,draw)
+                child.Values[i]+=RQValue.Resolve(upgrades[i].Value,file.Q,draw,def.OldRNG)
+                child.Counts[i]+=1
+            end
         end
         return child
     end
     for _,w in ipairs(file.W) do if w[2] then initial=applyWax(initial,WaxTypes.TypeByID[w[1]],w[3] or 0,false) end end
     local function stateKey(state)
         local parts={tostring(state.Draws)}
-        for i=1,#upgrades do parts[#parts+1]=tostring(state.Counts[i]);parts[#parts+1]=string.format("%.17g",state.Values[i]) end
+        for i=1,#upgrades do
+            parts[#parts+1]=tostring(state.Counts[i])
+            if not retained or retained[i] then parts[#parts+1]=string.format("%.17g",state.Values[i]) end
+        end
         return table.concat(parts,",")
     end
     local states={initial}
     local memoryFallback={}
+    local fallbackDepth
     local mergedOK,mergeError=pcall(function()
     for depth,wax in ipairs(waxes) do
         local merged,nextStates={},{}
@@ -341,7 +418,7 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
                 checkpoint()
             end
             if options.OnStage and index%64==0 then options.OnStage(string.format("Wax %d/%d: %d/%d states",depth,#chain,index,#states)) end
-            if #nextStates>(options.MaxStates or 50000) then error(memoryFallback,0) end
+            if #nextStates>(options.MaxStates or 50000) then fallbackDepth=depth;error(memoryFallback,0) end
         end
         states=nextStates
         if options.OnStage then options.OnStage(string.format("Wax %d/%d: %d distinct states",depth,#chain,#states)) end
@@ -349,8 +426,8 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
     end)
     if not mergedOK and mergeError~=memoryFallback then error(mergeError,0) end
     if not mergedOK then
-        states=nil
-        if options.OnStage then options.OnStage("Streaming exact search · bounded frontier · STOP available") end
+        -- Keep the completed merged prefix. Discard only the unfinished next layer.
+        if options.OnStage then options.OnStage("Counting remaining outcomes · keeping completed work") end
     end
     local function finish(state)
         local bee,hive,abilities,added=clone(baseBee),clone(baseHive),clone(baseAbilities),table.clone(baseAdded)
@@ -381,7 +458,7 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
     end
     local before=snapshot(file)
     local report={Total=total,Evaluated=0,Matched=0,Groups={},Examples={},AllWaxesSuccessRate=allSuccess,
-        ConditionalOnAllSuccess=true,DistinctStates=states and #states or 0,Streaming=not mergedOK,Before=before,ResetFirst=options.ResetWaxes==true}
+        ConditionalOnAllSuccess=true,TargetProjection=retained~=nil,DistinctStates=#states,Streaming=not mergedOK,Before=before,ResetFirst=options.ResetWaxes==true}
     local function consume(state)
         local result=finish(state)
         report.Evaluated+=state.Weight
@@ -393,21 +470,40 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
                 if not report.Examples[key] then report.Examples[key]={FutureSkips=clone(state.Path),CurrentOffset=result.CurrentOffset} end
             end
         end
+        progressDone+=state.Weight
+        if options.OnProgress and os.clock()-progressTick>=0.25 then
+            progressTick=os.clock();options.OnProgress(progressDone,total,os.clock()-started)
+        end
         checkpoint()
     end
-    if states then
+    if mergedOK then
         for _,state in ipairs(states) do consume(state) end
     else
-        -- Re-enumerate from the root with only one live path per depth.
+        -- Merge terminal states in bounded chunks before formatting snapshots.
+        -- Weights remain integers; flushing does not discard or sample any path.
+        local pending,pendingList={},{}
+        local function flush()
+            for _,state in ipairs(pendingList) do consume(state) end
+            pending={};pendingList={}
+        end
         local function visit(state,depth)
-            if depth>#waxes then consume(state);return end
+            if depth>#waxes then
+                local key=stateKey(state)
+                local prior=pending[key]
+                if prior then prior.Weight+=state.Weight
+                else pending[key]=state;pendingList[#pendingList+1]=state end
+                if #pendingList>=(options.TerminalMergeSize or 8192) then flush() end
+                return
+            end
             for skip=1,32 do visit(applyWax(state,waxes[depth],skip,true),depth+1);checkpoint() end
         end
-        visit(initial,1)
+        for _,state in ipairs(states) do visit(state,fallbackDepth) end
+        flush()
     end
     assert(report.Evaluated==total,"Exact branch count mismatch")
     report.ConditionalMatchRate=report.Matched/total
     report.SuccessAndMatchRate=allSuccess*report.ConditionalMatchRate
+    report.TransitionCacheHits=cacheHits;report.TransitionCacheMisses=cacheMisses
     report.Seconds=os.clock()-started
     if options.OnProgress then options.OnProgress(total,total) end
     return report
@@ -636,7 +732,12 @@ local C = {bg=Color3.fromRGB(18,18,18),panel=Color3.fromRGB(25,25,25),button=Col
 local state={source="Storage",index=1,tab="BATCH",wax="SoftWax",chain={},filters={},showBase=false,currentSeed=true,resetFirst=false,
     busy=false,cancelled=false,alive=true,items={},result="Choose an item, then START.",imported=nil,showItems=true,advanced=false}
 local connections={}
-local function connect(signal,fn) local c=signal:Connect(fn);connections[#connections+1]=c;return c end
+local function connect(signal,fn)
+    if #connections>256 then
+        for i=#connections,1,-1 do if not connections[i].Connected then table.remove(connections,i) end end
+    end
+    local c=signal:Connect(fn);connections[#connections+1]=c;return c
+end
 local function make(class,parent,props)
     local obj=Instance.new(class)
     for k,v in pairs(props or {}) do obj[k]=v end
@@ -736,7 +837,9 @@ local zoom=button(window,"ZoomIn","ZOOM IN",394,393,61,21,C.active)
 local seed=button(window,"Seed","● Current / swirled seed",214,417,174,21)
 local copyExplore=button(window,"CopyExplore","COPY ALL",394,417,61,21,C.blue)
 local start=button(window,"Start","START",512,394,75,44,C.active)
-local status=label(window,"Status","Local simulation · no wax consumed",10,439,580,10,8,C.muted)
+local status=label(window,"Status","Simulation only · your items stay unchanged",10,438,580,11,9,C.muted)
+local progressTrack=make("Frame",window,{Name="ProgressTrack",Position=UDim2.fromOffset(10,448),Size=UDim2.fromOffset(580,2),BackgroundColor3=C.panel,BorderSizePixel=0,Visible=false})
+local progressFill=make("Frame",progressTrack,{Name="Fill",Size=UDim2.fromScale(0,1),BackgroundColor3=C.green,BorderSizePixel=0})
 local popup=scroll(window,"ItemPicker",130,72,280,210);popup.BackgroundTransparency=0;popup.BackgroundColor3=C.button
 popup.Visible=false;popup.ZIndex=8;round(popup)
 local selector=scroll(window,"SelectorMenu",10,72,180,155);selector.BackgroundTransparency=0;selector.BackgroundColor3=C.button
@@ -750,7 +853,7 @@ local inventoryScroll=scroll(inventoryPanel,"Cards",7,36,251,406)
 local cardConnections={}
 local renderInventory
 local advancedButton=button(window,"Options","···",509,7,22,20);advancedButton.BackgroundTransparency=1
-local turpPreview=button(window,"TurpPreview","○ Preview Turp",210,77,145,23)
+local turpPreview=button(window,"TurpPreview","○ After Turp",210,77,145,23)
 turpPreview.Font=Enum.Font.Gotham;turpPreview.TextSize=10
 local planningSummary=label(window,"PlanningSummary","Keep waxes",370,77,220,21,9,C.muted)
 local advancedPanel=make("Frame",window,{Name="AdvancedPanel",Position=UDim2.fromOffset(275,104),
@@ -763,7 +866,7 @@ resetFirst.Font=Enum.Font.Gotham;resetFirst.TextSize=10
 local baseCaption=label(advancedPanel,"BaseOffsetCaption","Base RNG offset",10,70,130,23,10,C.muted)
 local baseOffsetInput=input(advancedPanel,"BaseOffset","0",151,70,74,23)
 seed.Parent=advancedPanel;seed.Position=UDim2.fromOffset(10,103);seed.Size=UDim2.fromOffset(215,24)
-tabs.GUIDE=button(advancedPanel,"GUIDE","OFFSETS + HIVE BONUSES",10,138,215,25,C.blue)
+tabs.GUIDE=button(advancedPanel,"GUIDE","HIVE BONUSES AT OFFSETS",10,138,215,25,C.blue)
 local optionHint=label(advancedPanel,"Hint","Changes affect the simulation only.",10,168,215,28,9,C.muted)
 optionHint.TextWrapped=true
 local help=button(advancedPanel,"Help","?",183,7,20,21);help.BackgroundTransparency=1
@@ -863,6 +966,7 @@ local function setText(textObj,frame,text)
 end
 local function setResults(text)
     state.result=text
+    resultScroll.CanvasPosition=Vector2.zero
     local colored={}
     local visibleText=text
     local predictionStart=text:find("=== MATCHED PREDICTIONS ===",1,true)
@@ -870,6 +974,7 @@ local function setResults(text)
         visibleText=text:sub(predictionStart+#"=== MATCHED PREDICTIONS ==="+1)
     end
     for line in (visibleText.."\n"):gmatch("(.-)\n") do
+        if #colored>=400 then colored[#colored+1]="… More results available with COPY.";break end
         local visual=line
         visual=visual:gsub("([%d]+%.[%d]+)%%",function(value)
             local n=tonumber(value)
@@ -945,6 +1050,10 @@ local function reloadItems()
     else
         for _,item in ipairs(E.Inventory()) do if item.Location==state.source then state.items[#state.items+1]=item end end
     end
+    if not state.initialSelected and #state.items>0 then
+        for i,item in ipairs(state.items) do if #(item.Data.W or {})<5 then state.index=i;break end end
+        state.initialSelected=true
+    end
     state.index=math.clamp(state.index,1,math.max(1,#state.items))
     source.Text=state.source;refreshCurrent();refreshFilters()
 end
@@ -953,18 +1062,18 @@ local function redraw()
     local explore=state.tab=="EXPLORE";local batch=state.tab=="BATCH";local guide=state.tab=="GUIDE"
     chainLabel.Visible=batch or state.tab=="SINGLE";add.Visible=batch or state.tab=="SINGLE";remove.Visible=add.Visible;clear.Visible=add.Visible;copy.Visible=not explore
     viewStats.Visible=false
-    stepsLabel.Visible=guide or explore;steps.Visible=guide or explore;offsetLabel.Visible=guide or explore;offset.Visible=guide or explore
+    stepsLabel.Visible=guide;steps.Visible=guide;offsetLabel.Visible=guide;offset.Visible=guide
     stepsLabel.Text=guide and "COUNT" or "STEPS:";offsetLabel.Text=guide and "FROM RC" or "OFFSET"
-    zoom.Visible=explore;seed.Visible=true;copyExplore.Visible=explore
-    seed.Parent=explore and window or advancedPanel
-    seed.Position=UDim2.fromOffset(explore and 350 or 10,explore and 417 or 103)
-    seed.Size=UDim2.fromOffset(explore and 148 or 215,21)
+    zoom.Visible=false;seed.Visible=true;copyExplore.Visible=explore
+    seed.Parent=advancedPanel
+    seed.Position=UDim2.fromOffset(10,103)
+    seed.Size=UDim2.fromOffset(215,21)
     itemsToggle.Visible=not state.showItems
     if state.tab=="SINGLE" then chainLabel.Text="Choose wax/count → ADD or START" end
     resetFirst.Visible=true
     resetFirst.Text=(state.resetFirst and "●" or "○").." Reset before search"
     resetFirst.BackgroundColor3=state.resetFirst and C.active or C.panel
-    turpPreview.Text=(state.resetFirst and "●" or "○").." Preview Turp"
+    turpPreview.Text=(state.resetFirst and "●" or "○").." After Turp"
     turpPreview.BackgroundColor3=state.resetFirst and C.active or C.panel
     turpPreview.Position=UDim2.fromOffset(state.source=="Trade" and 350 or 210,state.source=="Trade" and 7 or 77)
     turpPreview.Size=UDim2.fromOffset(state.source=="Trade" and 145 or 145,23)
@@ -981,7 +1090,7 @@ local function redraw()
     planningSummary.TextColor3=state.resetFirst and C.green or C.muted
     skipTrack.Visible=not guide;skipPrev.Visible=not guide;skip.Visible=not guide;skipNext.Visible=not guide
     window.WaxQuantityCaption.Visible=not guide
-    filterHeading.Text="SELECT FILTERS:"
+    filterHeading.Text=explore and "IMPROVEMENTS (ALL)" or "IMPROVEMENTS (ANY)"
     middle.Visible=not guide
     right.Position=UDim2.fromOffset(guide and 205 or 370,106)
     right.Size=UDim2.fromOffset(guide and 385 or 220,280)
@@ -995,7 +1104,8 @@ local function redraw()
     if batch then chainLabel.Text="CHAIN: "..(#state.chain>0 and table.concat(state.chain, " > ") or "ADD waxes to begin") end
     baseButton.Text=(state.showBase and not state.resetFirst and "●" or "○").."  Show base"
     seed.Text=explore and ((state.currentSeed and "●" or "○").." Use swirled seed") or (state.currentSeed and "● Current / swirled seed" or "○ Original seed")
-    wax.Text=state.wax;resultHeading.Text=guide and "OFFSETS + HIVE BONUSES" or explore and "EXPLORE RESULTS" or "MATCHED RESULTS"
+    wax.Text=state.wax;resultHeading.Text=guide and "OFFSETS + HIVE BONUSES" or explore and "NEXT WAX OUTCOMES" or "MATCHED RESULTS"
+    tabs.EXPLORE.Text="NEXT WAX";tabs.EXPLORE.TextSize=8
     waxCaption.Text="WAX"
     local tradeLayout=state.source=="Trade"
     source.Size=UDim2.fromOffset(tradeLayout and 82 or 110,23)
@@ -1022,7 +1132,20 @@ local function copyText(text)
     else notify("Clipboard unavailable in this executor.") end
 end
 local function changed() state.chain={};popup.Visible=false;selector.Visible=false;state.advanced=false;advancedPanel.Visible=false;refreshCurrent();refreshFilters();redraw();setResults("Choose filters or press START.") end
+local renderedItems,renderedCount
 renderInventory=function()
+    if renderedItems==state.items and renderedCount==#state.items then
+        for index in ipairs(state.items) do
+            local card=inventoryScroll:FindFirstChild("BeequipCard"..index)
+            if card then
+                card.BackgroundColor3=index==state.index and Color3.fromRGB(39,47,37) or Color3.fromRGB(37,39,37)
+                local border=card:FindFirstChildOfClass("UIStroke")
+                if border then border.Transparency=index==state.index and .05 or 1 end
+            end
+        end
+        return
+    end
+    renderedItems=state.items;renderedCount=#state.items
     for _,c in ipairs(cardConnections) do c:Disconnect() end
     cardConnections={}
     local oldPosition=inventoryScroll.CanvasPosition
@@ -1108,23 +1231,44 @@ connect(itemButton.Activated,function()
     end
     popup.CanvasSize=UDim2.fromOffset(0,#state.items*28+10)
 end)
+local showPlan
 connect(wax.Activated,function()
     if not editable() then return end
-    openSelector("Wax",state.source=="Trade" and 350 or 270,180,{"SoftWax","HardWax","CausticWax","DebugWax"},function(entry)state.wax=entry;redraw()end)
+    openSelector("Wax",state.source=="Trade" and 350 or 270,180,{"SoftWax","HardWax","CausticWax","DebugWax"},function(entry)state.wax=entry;redraw();if showPlan then showPlan() end end)
 end)
-connect(skipPrev.Activated,function()if editable() then skip.Text=tostring(((tonumber(skip.Text) or 1)-2)%math.max(1,remainingSlots())+1);redraw() end end)
-connect(skipNext.Activated,function()if editable() then skip.Text=tostring((tonumber(skip.Text) or 1)%math.max(1,remainingSlots())+1);redraw() end end)
+connect(skipPrev.Activated,function()if editable() then skip.Text=tostring(((tonumber(skip.Text) or 1)-2)%math.max(1,remainingSlots())+1);redraw();if showPlan then showPlan()end end end)
+connect(skipNext.Activated,function()if editable() then skip.Text=tostring((tonumber(skip.Text) or 1)%math.max(1,remainingSlots())+1);redraw();if showPlan then showPlan()end end end)
 connect(baseButton.Activated,function()if editable() then state.showBase=not state.showBase;if state.showBase then state.resetFirst=false end;refreshCurrent();redraw() end end)
 connect(seed.Activated,function()if editable() then state.currentSeed=not state.currentSeed;refreshCurrent();redraw() end end)
-for name,b in pairs(tabs) do connect(b.Activated,function()if editable() then state.tab=name;if name=="GUIDE" then local item=selected();offset.Text=tostring(item and (item.Data.UC or item.Data.RC) or 0);steps.Text="16" elseif name=="EXPLORE" then steps.Text="32";offset.Text="0" end;state.advanced=false;popup.Visible=false;selector.Visible=false;redraw() end end) end
+for name,b in pairs(tabs) do connect(b.Activated,function()if editable() then state.tab=name;if name=="SINGLE" then state.chain={} end;if name=="GUIDE" then local item=selected();offset.Text=tostring(item and (item.Data.UC or item.Data.RC) or 0);steps.Text="16" elseif name=="EXPLORE" then steps.Text="32";offset.Text="0" end;state.advanced=false;popup.Visible=false;selector.Visible=false;redraw() end end) end
+local function risk(chain)
+    local success,survival=1,1
+    for _,name in ipairs(chain) do
+        local wax=WaxTypes.Get(name:gsub("Wax$",""))
+        success*=wax.SuccessRate or 1
+        if wax.DestroyOnFail then survival*=wax.SuccessRate or 1 end
+    end
+    return success,survival
+end
+showPlan=function()
+    local chain={}
+    for _,name in ipairs(state.chain)do chain[#chain+1]=name end
+    if #chain==0 then for _=1,math.clamp(math.floor(tonumber(skip.Text) or 1),1,5)do chain[#chain+1]=state.wax end end
+    local success,survival=risk(chain)
+    setResults("YOUR WAX PLAN\n"..table.concat(chain," → ").."\n\n"..
+        string.format("All waxes succeed: %.4g%%\nBeequip destroyed: %.4g%%",success*100,(1-survival)*100)..
+        "\n\nResults assume all planned waxes succeed. Hard failures can leave a surviving item with different stats."..
+        "\n\nSelect improvements to measure, or START to see all outcomes.\nNo real wax is used.")
+end
+connect(skip.FocusLost,function()if editable()then redraw();showPlan()end end)
 connect(add.Activated,function()if editable() then
     local quantity=tonumber(skip.Text)
     if not quantity or quantity%1~=0 or quantity<1 or quantity>5 then notify("Wax quantity must be 1–5.");return end
-    if #state.chain+quantity>remainingSlots() then notify("Plan has "..#state.chain.." wax(es); "..remainingSlots().." slots free. Use REM/CLR, or Options → reset for a 5/5 item.");return end
+    if #state.chain+quantity>remainingSlots() then notify("Plan has "..#state.chain.." wax(es); "..remainingSlots().." slots free. Use REM/CLR, or After Turp for a 5/5 item.");return end
     for _=1,quantity do state.chain[#state.chain+1]=state.wax end
-    state.tab="BATCH";redraw();notify("Added "..quantity.." "..state.wax.." · "..#state.chain.." planned wax(es)") end end)
-connect(remove.Activated,function()if editable() then table.remove(state.chain);redraw() end end)
-connect(clear.Activated,function()if editable() then state.chain={};redraw() end end)
+    state.tab="BATCH";redraw();showPlan();notify("Added "..quantity.." "..state.wax.." · "..#state.chain.." planned wax(es)") end end)
+connect(remove.Activated,function()if editable() then table.remove(state.chain);redraw();showPlan() end end)
+connect(clear.Activated,function()if editable() then state.chain={};redraw();showPlan() end end)
 connect(copy.Activated,function()copyText(state.result)end)
 connect(copyExplore.Activated,function()copyText(state.result)end)
 connect(copyData.Activated,function()local item=selected();if item then copyText(Http:JSONEncode(item.Data)) end end)
@@ -1177,7 +1321,7 @@ connect(advancedButton.Activated,function()if editable() then state.advanced=not
 connect(optionsClose.Activated,function()state.advanced=false;redraw()end)
 connect(help.Activated,function()
     if not editable() then return end
-    setResults("QUICK HELP\n\nBATCH\nChoose wax/count → ADD → filters → START. Any selected improvement counts. COPY REPORT keeps exact counts and six-decimal percentages; the screen rounds them.\n\nGUIDE\nChoose wax → GUIDE → FROM RC and COUNT → SHOW. It lists current-item results plus post-reset offset scenarios, possible hive-bonus combinations and their matching random wax skips. No target filters are required. Each row predicts one additional wax. Reset scenarios remove existing waxes.\n\nOPTIONS\nReset before search is a simulated Turpentine reset; your item is unchanged. Base RNG offset and known current/original seed selection are advanced controls. Offset labels are not verified Greg equivalents.\n\nBatch chances assume successful waxes; chain success is shown separately. Guide shows successful-wax hive outcomes and includes success probability separately. DebugWax is simulation-only.\n\nSTOP cancels. Limits stop incomplete searches without returning partial probabilities.")
+    setResults("HOW TO USE\n\n1. Select a Beequip. Existing waxes stay in the simulation.\n2. Choose wax + quantity; ADD makes a mixed plan. REM undoes one; CLR starts over.\n3. Pick the stats you care about, then START. Selecting targets can make large exact searches much faster.\n\nNEXT WAX\nShows all 32 possible successful rolls for one extra wax. You cannot choose which roll the game gives you.\n\nAFTER TURP\nPreview the copied item with waxes removed and its reset seed/offset. Toggle off to return to the real current stats. Your item is unchanged.\n\nCHANCES\nOutcome percentages assume all planned waxes succeed. The results also show all-wax success, success plus target, and destruction risk. Failed Hard waxes can leave a surviving item with other results.\n\nHIVE BONUSES\nUnder ···: compare possible hive bonuses at reset-offset scenarios. These are simulations, not guaranteed resource routes.\n\nLong search? STOP is always available. No real waxes or items are used.")
 end)
 local function number(text,min,max,labelText)
     local n=tonumber(text);assert(n and n%1==0 and n>=min and n<=max,labelText.." must be "..min.."–"..max);return n
@@ -1185,14 +1329,46 @@ end
 connect(start.Activated,function()
     if state.busy then state.cancelled=true;notify("Stopping…");return end
     local item=selected();if not item then notify("Choose or import a Beequip first.");return end
+    if state.tab~="GUIDE" and remainingSlots()==0 then
+        setResults("NO WAX SLOTS LEFT\n\nThis item already has five waxes. Turn on After Turp to preview a reset and predict additional waxes. Your real item stays unchanged.")
+        notify("5/5 waxes · use After Turp for a reset preview")
+        return
+    end
     state.busy=true;state.cancelled=false;start.Text="STOP";popup.Visible=false;selector.Visible=false;state.advanced=false;advancedPanel.Visible=false
     local chosen={}
     for i,f in ipairs(filterDefs) do if state.filters[i] then chosen[#chosen+1]=f end end
     local opts=options()
     opts.Cancelled=function()return state.cancelled or not state.alive end
-    opts.OnProgress=function(done,total)notify(string.format("Counted %s / %s offset combinations",done,total))end
-    opts.OnStage=notify
-    setResults("Searching…\nPress STOP to cancel.")
+    local started=os.clock()
+    local stage="Preparing exact search"
+    local done,total=0,0
+    state.job=(state.job or 0)+1
+    local job=state.job
+    progressTrack.Visible=true;progressFill.Size=UDim2.fromScale(0,1)
+    opts.OnProgress=function(n,t)
+        done=n;total=t
+        progressFill.Size=UDim2.fromScale(math.clamp(n/math.max(1,t),0,1),1)
+    end
+    opts.OnStage=function(message)stage=message;notify(message)end
+    setResults("Calculating exact outcomes…\nYou can STOP at any time.")
+    task.spawn(function()
+        while state.alive and state.busy and state.job==job do
+            local elapsed=os.clock()-started
+            local text=string.format("%s · %.0fs elapsed",stage,elapsed)
+            if total>0 and state.tab~="GUIDE" then text=string.format("%.1f%% counted · %.0fs elapsed",done/total*100,elapsed) end
+            notify(text)
+            if elapsed>=1 then
+                local message="CALCULATING\n"..text.."\n\n"
+                if total>0 and done>total*.01 and elapsed>2 and state.tab=="BATCH" then
+                    local remaining=elapsed*(total-done)/done
+                    message..=string.format("Estimated remaining: ~%.0fs (may change).\n\n",remaining)
+                end
+                message..="Four/five-wax chains can take much longer. Completed work is retained when switching to a lower-memory search.\n\nSTOP cancels without using any items."
+                setResults(message)
+            end
+            task.wait(1)
+        end
+    end)
     task.spawn(function()
         local ok,err=xpcall(function()
             if state.tab=="SINGLE" or state.tab=="BATCH" then
@@ -1220,7 +1396,19 @@ connect(start.Activated,function()
                     end
                     return table.concat(descriptions," | ")
                 end
-                local report=E.Batch(item.Data,chain,predicate,group,opts)
+                if #chosen>0 then opts.Targets=chosen end
+                local cacheKey=Http:JSONEncode({Data=item.Data,Chain=chain,Targets=chosen,
+                    Reset=opts.ResetWaxes,Original=opts.UseOriginalSeed,BaseOffset=opts.BaseOffset})
+                local cached=state.batchCache and state.batchCache.Key==cacheKey
+                local report
+                if cached then
+                    report=state.batchCache.Report;hits=table.clone(state.batchCache.Hits)
+                else
+                    report=E.Batch(item.Data,chain,predicate,group,opts)
+                    local bytes,groups=0,0
+                    for key in pairs(report.Groups)do bytes+=#key;groups+=1;if bytes>2000000 or groups>5000 then break end end
+                    state.batchCache=bytes<=2000000 and groups<=5000 and {Key=cacheKey,Report=report,Hits=table.clone(hits)} or nil
+                end
                 local currentOptions=options();currentOptions.ResetWaxes=false
                 local current=E.Evaluate(item.Data,currentOptions)
                 local function percent(count,total)
@@ -1253,7 +1441,12 @@ connect(start.Activated,function()
                 lines[#lines+1]="";lines[#lines+1]="=== MATCHED PREDICTIONS ==="
                 lines[#lines+1]="Total predicts --> "..report.Total
                 lines[#lines+1]="Matched --> "..report.Matched.." ("..percent(report.Matched,report.Total)..")"
-                lines[#lines+1]="Successful-wax outcomes · chain success "..percent(report.AllWaxesSuccessRate,1)
+                local _,survival=risk(chain)
+                lines[#lines+1]="All waxes succeed: "..percent(report.AllWaxesSuccessRate,1)
+                lines[#lines+1]=(#chosen>0 and "All succeed + selected improvement: " or "All succeed + any outcome: ")..percent(report.SuccessAndMatchRate,1)
+                lines[#lines+1]="Beequip destroyed: "..percent(1-survival,1)
+                lines[#lines+1]=string.format("Exact results · %.2fs%s",report.Seconds,cached and " (reused)" or "")
+                lines[#lines+1]="Percentages below assume all planned waxes succeed."
                 lines[#lines+1]=""
                 lines[#lines+1]="--- INDIVIDUAL CHANCES ---"
                 for i,f in ipairs(chosen) do lines[#lines+1]=f.label..": "..percent(hits[i],report.Total) end
@@ -1300,8 +1493,8 @@ connect(start.Activated,function()
                 lines[#lines+1]="RC scenarios are not resource instructions. Reaching an RC needs a valid Soft/Turpentine route. Wax skip is random."
                 setResults(table.concat(lines,"\n"))
             else
-                local from=number(offset.Text,0,31,"Offset")
-                local count=number(steps.Text,1,32,"Steps")
+                local from=0
+                local count=32
                 local report=E.OffsetOutcomes(item.Data,state.wax,function(result,before)
                     for _,f in ipairs(chosen) do
                         if statValue(result,f)<=statValue(before,f)+1e-9 then return false end
@@ -1316,7 +1509,7 @@ connect(start.Activated,function()
                 report.Matched=matched;report.ConditionalMatchRate=matched/32
                 report.SuccessAndMatchRate=report.ConditionalMatchRate*report.WaxSuccessRate
                 local function pct(v)return string.format("%.4f%%",v*100)end
-                local lines={"NEXT WAX OFFSET MATCHES",state.wax,
+                local lines={"NEXT WAX: WHAT COULD HAPPEN",state.wax,
                     "Matches: "..report.Matched.." / 32",
                     "Target if wax succeeds: "..pct(report.ConditionalMatchRate),
                     "Wax succeeds + target: "..pct(report.SuccessAndMatchRate),
@@ -1327,7 +1520,7 @@ connect(start.Activated,function()
                         local result=row.Result
                         local trace=result.OffsetTrace
                         local w=trace.Waxes[#trace.Waxes]
-                        lines[#lines+1]="SKIP +"..row.Skip.." · FINAL DRAW "..row.FinalOffset
+                        lines[#lines+1]="POSSIBLE ROLL "..row.Skip.." · offset "..row.FinalOffset
                         if w then
                             lines[#lines+1]="Before skip "..w.Start.." → after skip "..w.AfterSkip.." → after wax rolls "..w.Finish
                             lines[#lines+1]="Upgrade-ability draws after wax: "..(trace.Final-trace.AfterWaxRolls)
@@ -1344,8 +1537,12 @@ connect(start.Activated,function()
         state.busy=false
         if state.alive then
             start.Text=state.tab=="GUIDE" and "SHOW" or "START"
-            if not ok then setResults("=== SEARCH INCOMPLETE ===\n"..err.."\n\nNo counts or percentages were produced for this run.") end
-            notify(ok and "Done" or err)
+            progressTrack.Visible=false
+            if not ok then
+                if state.cancelled then setResults("SEARCH STOPPED\n\nYour items are unchanged. Try fewer waxes for a faster exact result.")
+                else setResults("SEARCH INCOMPLETE\n"..err.."\n\nTry a shorter chain. No partial probabilities are shown.") end
+            end
+            notify(ok and string.format("Finished · %.1fs · simulation only",os.clock()-started) or state.cancelled and "Stopped · your items are unchanged" or err)
         end
     end)
 end)
@@ -1390,6 +1587,12 @@ end
 local managerOK,manager=pcall(require,RS.Gui.BeequipMenus.BeequipMenuManager)
 local tradeOK,trade=pcall(require,RS.Gui.TradeGui)
 local observed={}
+local function fileStamp(file)
+    if type(file)~="table" then return "" end
+    local parts={tostring(file.T),tostring(file.S),tostring(file.OS),tostring(file.Q),tostring(file.UC),tostring(file.RC)}
+    for _,w in ipairs(file.W or {})do parts[#parts+1]=tostring(w[1])..":"..tostring(w[2])..":"..tostring(w[3])end
+    return table.concat(parts,"|")
+end
 task.spawn(function()
     while state.alive do
         pcall(function()
@@ -1397,8 +1600,9 @@ task.spawn(function()
                 for _,location in ipairs({"Case","Storage","Inbox"}) do
                     local menu=manager.GetByName("Beequip "..location)
                     local file=menu and menu.BeequipInspector and menu.BeequipInspector.BeequipFile
-                    if observed[location]~=file then
-                        observed[location]=file
+                    local stamp=fileStamp(file)
+                    if not state.busy and (observed[location]~=file or observed[location.."Stamp"]~=stamp) then
+                        observed[location]=file;observed[location.."Stamp"]=stamp
                         if file then selectNative(file,location) end
                     end
                 end
@@ -1406,9 +1610,10 @@ task.spawn(function()
             if tradeOK then
                 local inspector=trade.GetItemInspector()
                 local item=inspector and inspector.Tradable
-                if observed.Trade~=item then
-                    observed.Trade=item
-                    local pack=item and item.Pack
+                local pack=item and item.Pack
+                local stamp=fileStamp(pack and pack.File)
+                if not state.busy and (observed.Trade~=item or observed.TradeStamp~=stamp) then
+                    observed.Trade=item;observed.TradeStamp=stamp
                     if pack and pack.Category=="Beequip" then selectNative(pack.File,"Trade") end
                 end
             end
