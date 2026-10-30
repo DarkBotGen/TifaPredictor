@@ -1,6 +1,18 @@
 # Automatic target planner
 
-Select a Beequip and the target filters (Token Link, another ability, a hive bonus or bee stat). Open the top-right menu and choose FIND BEST WAX PLAN. RESETS controls the maximum modeled Turpentine cycles (0..3); SECONDS controls the search budget (default 90). Press FIND BEST. No waxes or items are actually used.
+Select a Beequip and the target filters (Token Link, another ability, a hive bonus or bee stat). Open the top-right menu and choose FIND BEST WAX PLAN. RESETS controls the maximum modeled Turpentine cycles (0..3); SECONDS controls the search budget (default 8). Press FIND BEST. Quick checks examine up to three waxes; 30+ seconds enables five-wax finishing plans. No waxes or items are actually used.
+
+## Three risk/reward choices
+
+The report shows SAFEST TARGET ROUTE, MORE RISK / MORE BONUSES, and HIGHER RISK / HIGHER REWARD. Safest prioritizes survival, then target chance. Riskier alternatives must have strictly lower survival and a greater expected net count of additional improved traits, conditional on obtaining the target and retaining the item. The third must be riskier and higher in this score than the second. Missing alternatives are explicitly reported rather than fabricated. Highest unconditional target chance is also shown separately, since it need not be the safest route.
+
+Additional reward counts distinct improved traits minus reduced traits; it is not a monetary score or a comparison of raw numerical magnitudes across different stats. Actual bonus values, new abilities, reductions, example combinations, combination probabilities, expected trait gains/losses and chance of any extra improvement are displayed. All relevant stat values are retained during this calculation; selected-target-only projection is disabled to avoid false extra-bonus probabilities.
+
+A one-wax successful branch can be 1/32 or 3/32. Before a random Soft setup is observed, Soft then Caustic has 1,024 successful-skip paths, not just 32. Exact successful-roll hit counts are shown for Soft/Caustic chains; Hard plans instead identify their success/failure mixtures. Recheck after each actual wax to condition predictions on its observed outcome. No skip is controllable or guaranteed.
+
+After a result, the panel widens; TARGET reopens the filter selector. The searched target stays selected when switching to compatible Beequips. Incompatible items clearly say the saved target is unavailable instead of silently changing the objective. Repeating an unchanged check reuses the result; changing the item, history, target, reset limit, depth or budget invalidates the key. Increase SECONDS to extend coverage rather than repeating an identical bounded check.
+
+Live Smiley Sticker validation with a Max Bee Energy hive target completed 67/95 candidates in an eight-second scan. It produced genuine 0%, 75% and 98.4375% destruction choices, with approximately 1.94, 2.57 and 2.94 additional improved traits conditional on a surviving target hit. Their overall target probabilities were 16.146729%, 8.298492% and 0.871181% for that item. These are item-specific calculations, not universal Smiley odds or resource-consuming server tests. Strict ordering, full-snapshot reward counts, grouped probability sums, independent two-Hard binomial reward mixtures, sticky targets, incompatible-target messaging and wide results were checked.
 
 The planner starts from the actual current file. It counts every reset in the route cost; the After Turp display option does not give it a free setup reset. Ability targets require presence; stat/hive targets require improvement over the original current stats. All selected targets must hold together. An ability already present needs no further waxing when it is the only target.
 

@@ -2,7 +2,7 @@
 
 ## Automatic target planning
 
-Select desired ability/hive/stat filters, then ··· → FIND BEST WAX PLAN. Set RESETS (0..3) and SECONDS (default 90), then FIND BEST. Results rank exact completed fixed plans by target plus surviving item, including setup steps, offsets, costs and per-offset target values/probabilities. It includes Soft/Turpentine setup routes, up to five finishing waxes and Hard failures. Incomplete coverage is clearly labeled. See Automatic-wax-planner.md for the recovered Paperclip rules, tested examples and search limits.
+Select desired ability/hive/stat filters, then ··· → FIND BEST WAX PLAN. The default eight-second check examines up to three finishing waxes; 30+ seconds enables five. Results show a safest route and up to two strictly riskier, higher-extra-trait-reward alternatives, plus highest target chance, actual additional bonuses, costs, offsets and branch counts. Hard failures and reduced traits are included. Targets stay selected across compatible items, results widen, and unchanged checks reuse their result. Incomplete coverage or missing alternatives is explicit. See Automatic-wax-planner.md for ranking definitions, item-specific tests and limits.
 
 ## Current optimized interface
 

@@ -678,9 +678,12 @@ function Engine.AutoPlan(data,targets,matchesTarget,groupBy,options)
     local maxResets=options.MaxResets or 1
     assert(maxResets%1==0 and maxResets>=0 and maxResets<=3,"Choose 0..3 resets")
     local budget=options.PlannerSeconds or 90
+    local maxFuture=options.MaxFutureWaxes or 5
+    assert(maxFuture%1==0 and maxFuture>=1 and maxFuture<=5,"Choose 1..5 finishing wax slots")
     assert(budget>=1 and budget<=600,"Planner budget must be 1..600 seconds")
     local opts=table.clone(options)
     opts.ResetWaxes=false;opts.ShowBase=false;opts.UseOriginalSeed=false;opts.BaseOffset=0;opts.Targets=targets
+    if options.ExtraReward then opts.Targets=nil end
     local initial=detached(data,opts)
     local baseline=snapshot(initial)
     local started=os.clock()
@@ -739,7 +742,7 @@ function Engine.AutoPlan(data,targets,matchesTarget,groupBy,options)
     end
     local candidates={}
     for index,r in ipairs(routes)do
-        local slots=5-#(r.File.W or {})
+        local slots=math.min(maxFuture,5-#(r.File.W or {}))
         local unique={}
         if r.Turps>0 then candidates[#candidates+1]={Route=index,Chain={},Prefix=0,Tail=0,Finisher="SoftWax",Priority=-1}end
         local finishers=causticRequired and {"CausticWax"} or {"SoftWax","HardWax","CausticWax"}
@@ -774,7 +777,11 @@ function Engine.AutoPlan(data,targets,matchesTarget,groupBy,options)
         if #chain==0 then
             local result=snapshot(file)
             local hit=matchesTarget(result,baseline)
-            report={Total=1,Matched=hit and 1 or 0,Groups={}}
+            report={Total=1,Matched=hit and 1 or 0,Groups={},ExtraWeight=0,ExtraHitWeight=0,LossWeight=0}
+            if hit and options.ExtraReward then
+                local extra,loss=options.ExtraReward(result,baseline)
+                report.ExtraWeight=extra;report.ExtraHitWeight=extra>0 and 1 or 0;report.LossWeight=loss or 0
+            end
             if hit and groupBy then report.Groups[tostring(groupBy(result,baseline))]=1 end
         else
             opts.MaxSeconds=math.max(.01,budget-(os.clock()-started))
@@ -787,7 +794,17 @@ function Engine.AutoPlan(data,targets,matchesTarget,groupBy,options)
                 if outcomes>=128 then groupedOverflow=true;return "Other matching target outcomes (grouped)"end
                 known[text]=true;outcomes+=1;return text
             end
-            report=Engine.Batch(file,chain,function(result)return matchesTarget(result,baseline)end,groupBy and summarize or nil,opts)
+            local extraWeight,extraHitWeight,lossWeight=0,0,0
+            report=Engine.Batch(file,chain,function(result,_,weight)
+                local hit=matchesTarget(result,baseline)
+                if hit and options.ExtraReward then
+                    local extra,loss=options.ExtraReward(result,baseline)
+                    extraWeight+=extra*weight;lossWeight+=(loss or 0)*weight
+                    if extra>0 then extraHitWeight+=weight end
+                end
+                return hit
+            end,groupBy and summarize or nil,opts)
+            report.ExtraWeight=extraWeight;report.ExtraHitWeight=extraHitWeight;report.LossWeight=lossWeight
         end
         memo[key]=report
         return report
@@ -798,8 +815,13 @@ function Engine.AutoPlan(data,targets,matchesTarget,groupBy,options)
         if options.OnStage then options.OnStage("Plan "..index.."/"..#candidates.." · RC "..(route.File.RC or 0).." · "..(#c.Chain>0 and table.concat(c.Chain," > ") or "reset alone"))end
         local ok,row=pcall(function()
             local chance,survival,groups=0,1,{}
+            local extraMass,extraHitMass,lossMass=0,0,0
+            local successfulMatches,successfulTotal
             local function accumulate(report,mass)
                 chance+=mass*report.Matched/report.Total
+                extraMass+=mass*(report.ExtraWeight or 0)/report.Total
+                extraHitMass+=mass*(report.ExtraHitWeight or 0)/report.Total
+                lossMass+=mass*(report.LossWeight or 0)/report.Total
                 for key,count in pairs(report.Groups)do groups[key]=(groups[key] or 0)+mass*count/report.Total end
             end
             if c.Finisher=="HardWax" then
@@ -816,13 +838,18 @@ function Engine.AutoPlan(data,targets,matchesTarget,groupBy,options)
                 end
             else
                 if c.Finisher=="CausticWax"then survival=.25^c.Tail end
-                accumulate(conditional(c.Route,c.Chain),survival)
+                local exact=conditional(c.Route,c.Chain)
+                successfulMatches=exact.Matched;successfulTotal=exact.Total
+                accumulate(exact,survival)
             end
             local steps=clone(route.Steps)
             if #c.Chain>0 then steps[#steps+1]=table.concat(c.Chain," > ")end
             return {Chain=clone(c.Chain),Steps=steps,Kind=route.Kind,ResetOffset=route.File.RC or 0,
                 TurpentineCount=route.Turps,FillerSoftCount=route.Soft,WaxCount=route.Soft+#c.Chain,
-                TargetChance=chance,SurvivalChance=survival,ConditionalChance=survival>0 and chance/survival or 0,Groups=groups}
+                TargetChance=chance,SurvivalChance=survival,ConditionalChance=survival>0 and chance/survival or 0,Groups=groups,
+                ExpectedExtra=chance>0 and extraMass/chance or 0,ExtraChance=chance>0 and extraHitMass/chance or 0,
+                ExpectedLoss=chance>0 and lossMass/chance or 0,
+                SuccessfulMatches=successfulMatches,SuccessfulTotal=successfulTotal}
         end)
         if not ok then
             if stop() or tostring(row):find("time limit",1,true)then timedOut=not stopped;break end
@@ -844,7 +871,32 @@ function Engine.AutoPlan(data,targets,matchesTarget,groupBy,options)
     end
     local offsetRows={};for _,row in pairs(offsets)do offsetRows[#offsetRows+1]=row end
     table.sort(offsetRows,function(a,b)if a.ResetOffset==b.ResetOffset then return a.Kind<b.Kind end;return a.ResetOffset<b.ResetOffset end)
-    return {Rows=rows,Offsets=offsetRows,Completed=#rows,Candidates=#candidates,Stopped=stopped,TimedOut=timedOut,
+    -- Risk/reward cards are evidence-based; do not invent risky alternatives.
+    local safe
+    for _,row in ipairs(rows)do if row.TargetChance>0 then
+        if not safe or row.SurvivalChance>safe.SurvivalChance+1e-12
+            or math.abs(row.SurvivalChance-safe.SurvivalChance)<1e-12 and row.TargetChance>safe.TargetChance+1e-12 then safe=row end
+    end end
+    local risky={}
+    if safe then for _,row in ipairs(rows)do
+        if row.TargetChance>0 and row.SurvivalChance<safe.SurvivalChance-1e-12
+            and row.ExpectedExtra-row.ExpectedLoss>safe.ExpectedExtra-safe.ExpectedLoss+1e-9 then risky[#risky+1]=row end
+    end end
+    table.sort(risky,function(a,b)
+        if a.SurvivalChance~=b.SurvivalChance then return a.SurvivalChance>b.SurvivalChance end
+        if a.TargetChance~=b.TargetChance then return a.TargetChance>b.TargetChance end
+        return a.ExpectedExtra-a.ExpectedLoss>b.ExpectedExtra-b.ExpectedLoss
+    end)
+    local medium=risky[1]
+    local high
+    if medium then for _,row in ipairs(risky)do
+        if row~=medium and row.SurvivalChance<medium.SurvivalChance-1e-12 and row.ExpectedExtra-row.ExpectedLoss>medium.ExpectedExtra-medium.ExpectedLoss+1e-9 then
+            if not high or row.ExpectedExtra-row.ExpectedLoss>high.ExpectedExtra-high.ExpectedLoss+1e-9
+                or math.abs((row.ExpectedExtra-row.ExpectedLoss)-(high.ExpectedExtra-high.ExpectedLoss))<1e-9 and row.TargetChance>high.TargetChance then high=row end
+        end
+    end end
+    return {Recommendations={Safest=safe,Balanced=medium,HighReward=high},MaxFutureWaxes=maxFuture,
+        Rows=rows,Offsets=offsetRows,Completed=#rows,Candidates=#candidates,Stopped=stopped,TimedOut=timedOut,
         Seconds=os.clock()-started,MaxResets=maxResets,CausticRequired=causticRequired,GroupedOverflow=groupedOverflow,Complete=#rows==#candidates}
 end
 
