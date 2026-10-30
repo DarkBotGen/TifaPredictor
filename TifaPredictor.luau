@@ -537,7 +537,7 @@ local skipTrack=make("Frame",window,{Name="SkipSelector",Position=UDim2.fromOffs
 local skipPrev=button(window,"SkipPrevious","<",390,45,24,23)
 local skip=input(window,"WaxCount","1",414,45,72,23)
 local skipNext=button(window,"SkipNext",">",486,45,24,23)
-label(window,"WaxQuantityCaption","WAX COUNT",415,31,95,12,8,C.muted)
+label(window,"WaxQuantityCaption","ADD WAXES",415,31,95,12,8,C.muted)
 skipPrev.BackgroundColor3=C.panel;skip.BackgroundColor3=C.panel;skipNext.BackgroundColor3=C.panel
 local baseButton=button(window,"ShowBase","○  Show base",520,45,72,23)
 baseButton.BackgroundTransparency=1;baseButton.Font=Enum.Font.Gotham;baseButton.TextSize=9
@@ -616,6 +616,10 @@ local filterDefs={}
 local function notify(text) if state.alive then status.Text=text end end
 local function editable() if state.busy then notify("Press STOP before changing the simulation.");return false end;return true end
 local function selected() return state.items[state.index] end
+local function remainingSlots()
+    local item=selected()
+    return state.resetFirst and 5 or math.max(0,5-#(item and item.Data.W or {}))
+end
 local function options()
     return {UseOriginalSeed=not state.currentSeed,ResetWaxes=state.resetFirst,BaseOffset=tonumber(baseOffsetInput.Text) or -1}
 end
@@ -807,7 +811,13 @@ local function redraw()
     advancedPanel.Visible=state.advanced
     advancedButton.BackgroundColor3=state.advanced and C.active or C.button
     local baseValue=tonumber(baseOffsetInput.Text) or 0
-    planningSummary.Text=(state.resetFirst and "After reset" or "Keep waxes")..(baseValue~=0 and " · offset "..baseValue or "")
+    local remaining=remainingSlots()
+    local added=state.tab=="BATCH" and #state.chain or state.tab=="EXPLORE" and 1 or tonumber(skip.Text) or 1
+    if state.tab~="BATCH" and state.tab~="GUIDE" then
+        skip.Text=tostring(math.clamp(tonumber(skip.Text) or 1,1,math.max(1,remaining)))
+        added=state.tab=="EXPLORE" and 1 or tonumber(skip.Text)
+    end
+    planningSummary.Text=(state.resetFirst and "Reset: " or "Keep waxes: ")..(5-remaining).."/5 → "..(5-remaining+added).."/5 · "..remaining.." free"
     planningSummary.TextColor3=state.resetFirst and C.green or C.muted
     skipTrack.Visible=not guide;skipPrev.Visible=not guide;skip.Visible=not guide;skipNext.Visible=not guide
     window.WaxQuantityCaption.Visible=not guide
@@ -918,15 +928,15 @@ connect(wax.Activated,function()
     if not editable() then return end
     openSelector("Wax",270,180,{"SoftWax","HardWax","CausticWax","DebugWax"},function(entry)state.wax=entry;redraw()end)
 end)
-connect(skipPrev.Activated,function()if editable() then skip.Text=tostring(((tonumber(skip.Text) or 1)-2)%5+1) end end)
-connect(skipNext.Activated,function()if editable() then skip.Text=tostring((tonumber(skip.Text) or 1)%5+1) end end)
+connect(skipPrev.Activated,function()if editable() then skip.Text=tostring(((tonumber(skip.Text) or 1)-2)%math.max(1,remainingSlots())+1);redraw() end end)
+connect(skipNext.Activated,function()if editable() then skip.Text=tostring((tonumber(skip.Text) or 1)%math.max(1,remainingSlots())+1);redraw() end end)
 connect(baseButton.Activated,function()if editable() then state.showBase=not state.showBase;refreshCurrent();redraw() end end)
 connect(seed.Activated,function()if editable() then state.currentSeed=not state.currentSeed;refreshCurrent();redraw() end end)
 for name,b in pairs(tabs) do connect(b.Activated,function()if editable() then state.tab=name;state.advanced=false;popup.Visible=false;selector.Visible=false;redraw() end end) end
 connect(add.Activated,function()if editable() then
     local quantity=tonumber(skip.Text)
     if not quantity or quantity%1~=0 or quantity<1 or quantity>5 then notify("Wax quantity must be 1–5.");return end
-    if #state.chain+quantity>5 then notify("A chain can contain at most five future waxes.");return end
+    if #state.chain+quantity>remainingSlots() then notify("Only "..remainingSlots().." additional wax slot(s) remain. Existing waxes are kept.");return end
     for _=1,quantity do state.chain[#state.chain+1]=state.wax end
     redraw() end end)
 connect(remove.Activated,function()if editable() then table.remove(state.chain);redraw() end end)
@@ -1004,6 +1014,7 @@ connect(start.Activated,function()
                     for _,name in ipairs(state.chain) do chain[#chain+1]=name end
                 end
                 assert(#chain>0,"Choose a wax and press ADD, then START")
+                assert(#chain<=remainingSlots(),"Only "..remainingSlots().." additional wax slot(s) remain; remove waxes from the planned chain.")
                 local hits={};for i=1,#chosen do hits[i]=0 end
                 local function predicate(result,before,weight)
                     local any=#chosen==0
@@ -1028,6 +1039,7 @@ connect(start.Activated,function()
                 end
                 local lines={"=== BATCH MATCHES ===","Wax Chain: "..table.concat(chain," > "),"Beequip: "..item.Data.T,"",
                     "Simulation: "..(state.resetFirst and "after simulated Turpentine reset" or "keep existing wax history"),
+                    "Additional waxes: "..#chain.." · W: "..#report.Before.WaxHistory.."/5 → "..(#report.Before.WaxHistory+#chain).."/5",
                     "=== CURRENT STATS ===","","CUR | W: "..#current.WaxHistory.."/5"}
                 local history={};local names={[1]="Soft",[2]="Hd",[3]="Cs",[4]="Swirled",[5]="Db"}
                 for _,w in ipairs(current.WaxHistory) do history[#history+1]=(names[w[1]] or tostring(w[1]))..":"..(w[2] and tostring(w[3] or 0) or "Failed") end
