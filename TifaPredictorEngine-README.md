@@ -1,5 +1,7 @@
 # Readable Beequip simulation engine
 
+AutoPlan(data, targets, matchesTarget, groupBy, options) searches bounded Soft-prefix/finisher routes and reachable reset setups. Options MaxResets defaults to 1 (0..3), PlannerSeconds to 90 (1..600). Returns ranked Rows, ascending Offsets, Completed/Candidates coverage, Complete/Stopped/TimedOut flags and Seconds. Predicates/groups must inspect only target descriptors. Hard failure mixtures are included; interrupted candidates are excluded. Group overflow beyond 128 combinations is explicitly aggregated, without changing total target probability. See Automatic-wax-planner.md.
+
 Execute TifaPredictorEngine.luau in the connected game to install getgenv().TifaPredictorEngine. The complete GUI version is TifaPredictor.luau. See TifaPredictor-GUI-README.md for current semantics, offset definitions, validation and limits.
 
 Evaluate(data, options): returns generated Bee, hive and ability modifiers plus RNG counters.

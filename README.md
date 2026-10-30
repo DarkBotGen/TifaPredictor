@@ -1,5 +1,7 @@
 # Predictor
 
+Automatic planning: select an ability/hive/stat target, then **··· → FIND BEST WAX PLAN**. It compares setup waxes, reachable reset offsets and up to five finishing waxes, showing target chances, destruction risk, costs and hive/stat outcomes at each offset. **Best found** is bounded by your reset/time budget and completed candidate coverage. See [planner rules and verified example](Automatic-wax-planner.md).
+
 Readable Bee Swarm Simulator Beequip prediction simulator with a dark GUI and image inventory sidebar.
 
 Latest optimization: **NEXT WAX** replaces Explore's range/zoom controls; **After Turp** remains visible. Select desired improvements for a faster exact search. Plans show success/destruction risk, searches show progress and STOP, and unchanged repeat searches reuse their exact result.

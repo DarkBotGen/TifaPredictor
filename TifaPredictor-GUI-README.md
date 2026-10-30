@@ -1,5 +1,9 @@
 # Predictor GUI
 
+## Automatic target planning
+
+Select desired ability/hive/stat filters, then ··· → FIND BEST WAX PLAN. Set RESETS (0..3) and SECONDS (default 90), then FIND BEST. Results rank exact completed fixed plans by target plus surviving item, including setup steps, offsets, costs and per-offset target values/probabilities. It includes Soft/Turpentine setup routes, up to five finishing waxes and Hard failures. Incomplete coverage is clearly labeled. See Automatic-wax-planner.md for the recovered Paperclip rules, tested examples and search limits.
+
 ## Current optimized interface
 
 Explore is now **NEXT WAX** and automatically checks all 32 possible successful rolls; the range/zoom fields are removed. The visible Turpentine toggle is **After Turp**. Select desired improvements before searching to enable faster exact target searches. Plans show wax success and destruction risk. Progress includes elapsed time, counting progress and STOP. Repeating an unchanged search reuses its exact result. Screen output is limited to 400 lines; COPY retains everything.

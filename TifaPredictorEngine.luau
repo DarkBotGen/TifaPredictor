@@ -670,6 +670,184 @@ function Engine.Guide(data, finishingWax, matchesTarget, options)
         FinishingWax=finishingWax,AllSelectedTargets=true,IncludesNonDestructiveFailures=true}
 end
 
+-- Bounded automatic search. Each completed candidate is exact; unfinished batches
+-- contribute nothing. Rankings are only over completed fixed Soft-prefix/finisher plans.
+function Engine.AutoPlan(data,targets,matchesTarget,groupBy,options)
+    options=options or {}
+    assert(type(targets)=="table" and #targets>0,"Select the ability or hive/stat target first")
+    local maxResets=options.MaxResets or 1
+    assert(maxResets%1==0 and maxResets>=0 and maxResets<=3,"Choose 0..3 resets")
+    local budget=options.PlannerSeconds or 90
+    assert(budget>=1 and budget<=600,"Planner budget must be 1..600 seconds")
+    local opts=table.clone(options)
+    opts.ResetWaxes=false;opts.ShowBase=false;opts.UseOriginalSeed=false;opts.BaseOffset=0;opts.Targets=targets
+    local initial=detached(data,opts)
+    local baseline=snapshot(initial)
+    local started=os.clock()
+    local stopped,timedOut=false,false
+    local function stop()
+        if options.Cancelled and options.Cancelled() then stopped=true;return true end
+        if os.clock()-started>=budget then timedOut=true;return true end
+        return false
+    end
+    opts.Cancelled=stop
+    local routes={{File=initial,Steps={},Turps=0,Soft=0,Kind="Current"}}
+    local frontier={routes[1]}
+    local seen={}
+    for depth=1,maxResets do
+        local nextRoutes={}
+        for _,r in ipairs(frontier) do
+            local file=r.File
+            local counter=file.UC
+            if counter==nil then
+                assert((file.RC or 0)==0,"Missing UC; refresh the item for reset planning")
+                counter=0;for _,w in ipairs(file.W or {})do if w[1]~=4 then counter+=1 end end
+            end
+            for soft=0,5-#(file.W or {}) do
+                if soft>0 or #(file.W or {})>0 then
+                    local reset=clone(file)
+                    reset.UC=counter+soft;reset.RC=reset.UC;reset.W=nil;reset.S=reset.OS or reset.S
+                    local steps=clone(r.Steps)
+                    if soft>0 then steps[#steps+1]="SoftWax ×"..soft end
+                    steps[#steps+1]="Turpentine → RC "..reset.RC
+                    local next={File=reset,Steps=steps,Turps=depth,Soft=r.Soft+soft,Kind="Reset"}
+                    local prior=nextRoutes[reset.RC]
+                    if not prior or next.Soft<prior.Soft then nextRoutes[reset.RC]=next end
+                end
+            end
+        end
+        frontier={}
+        for rc,r in pairs(nextRoutes) do
+            frontier[#frontier+1]=r
+            if not seen[rc] then seen[rc]=true;routes[#routes+1]=r end
+        end
+    end
+    -- A target requiring a Caustic-only upgrade cannot be created by Soft/Hard.
+    local causticRequired=false
+    local def=BeequipTypes.Get(initial.T)
+    for _,f in ipairs(targets) do
+        local found,normal=false,false
+        for _,u in ipairs(def.Upgrades or {}) do
+            local same=f.kind=="Ability" and u.BeeAbility==f.name
+                or f.kind=="Bee" and u.BeeStat==f.name
+                or f.kind=="Hive" and u.HiveBonusStat==f.name and tag(u)==tag({HiveBonusStat=f.name,Op=f.op,Params=f.params})
+            if same then found=true;if not u.CausticOnly then normal=true end end
+        end
+        local alreadyPresent=false
+        if f.kind=="Ability" then for _,a in ipairs(baseline.Abilities)do if a[1]==f.name then alreadyPresent=true end end end
+        if found and not normal and not alreadyPresent then causticRequired=true end
+    end
+    local candidates={}
+    for index,r in ipairs(routes)do
+        local slots=5-#(r.File.W or {})
+        local unique={}
+        if r.Turps>0 then candidates[#candidates+1]={Route=index,Chain={},Prefix=0,Tail=0,Finisher="SoftWax",Priority=-1}end
+        local finishers=causticRequired and {"CausticWax"} or {"SoftWax","HardWax","CausticWax"}
+        for soft=0,slots-1 do
+            for _,wax in ipairs(finishers)do
+                for n=1,slots-soft do
+                    local chain={}
+                    for _=1,soft do chain[#chain+1]="SoftWax"end
+                    for _=1,n do chain[#chain+1]=wax end
+                    local key=table.concat(chain,">")
+                    if not unique[key]then
+                        unique[key]=true
+                        local priority=#chain==1 and 0 or #chain<=3 and (.5+#chain*.1) or (index==1 and soft==0 and wax=="CausticWax" and n==slots) and 1 or 2+#chain*.1+r.Turps*.01
+                        candidates[#candidates+1]={Route=index,Chain=chain,Prefix=soft,Tail=n,Finisher=wax,Priority=priority}
+                    end
+                end
+            end
+        end
+    end
+    table.sort(candidates,function(a,b)
+        if a.Priority~=b.Priority then return a.Priority<b.Priority end
+        if a.Route~=b.Route then return a.Route<b.Route end
+        return table.concat(a.Chain,">")<table.concat(b.Chain,">")
+    end)
+    local rows,memo={},{}
+    local groupedOverflow=false
+    local function conditional(routeIndex,chain)
+        local key=routeIndex..":"..table.concat(chain,">")
+        if memo[key]then return memo[key]end
+        local file=routes[routeIndex].File
+        local report
+        if #chain==0 then
+            local result=snapshot(file)
+            local hit=matchesTarget(result,baseline)
+            report={Total=1,Matched=hit and 1 or 0,Groups={}}
+            if hit and groupBy then report.Groups[tostring(groupBy(result,baseline))]=1 end
+        else
+            opts.MaxSeconds=math.max(.01,budget-(os.clock()-started))
+            opts.OnProgress=nil
+            opts.OnStage=nil
+            local known,outcomes={},0
+            local function summarize(result,before)
+                local text=tostring(groupBy(result,before))
+                if known[text]then return text end
+                if outcomes>=128 then groupedOverflow=true;return "Other matching target outcomes (grouped)"end
+                known[text]=true;outcomes+=1;return text
+            end
+            report=Engine.Batch(file,chain,function(result)return matchesTarget(result,baseline)end,groupBy and summarize or nil,opts)
+        end
+        memo[key]=report
+        return report
+    end
+    for index,c in ipairs(candidates)do
+        if stop()then break end
+        local route=routes[c.Route]
+        if options.OnStage then options.OnStage("Plan "..index.."/"..#candidates.." · RC "..(route.File.RC or 0).." · "..(#c.Chain>0 and table.concat(c.Chain," > ") or "reset alone"))end
+        local ok,row=pcall(function()
+            local chance,survival,groups=0,1,{}
+            local function accumulate(report,mass)
+                chance+=mass*report.Matched/report.Total
+                for key,count in pairs(report.Groups)do groups[key]=(groups[key] or 0)+mass*count/report.Total end
+            end
+            if c.Finisher=="HardWax" then
+                -- Hard failures occupy slots but do not advance seeded generation.
+                -- All Hard applications are consecutive: sum binomial success counts.
+                local choose=1
+                for k=0,c.Tail do
+                    if stop()then error("Planner interrupted",0)end
+                    local chain={}
+                    for _=1,c.Prefix do chain[#chain+1]="SoftWax"end
+                    for _=1,k do chain[#chain+1]="HardWax"end
+                    accumulate(conditional(c.Route,chain),choose*.6^k*.4^(c.Tail-k))
+                    choose=choose*(c.Tail-k)/(k+1)
+                end
+            else
+                if c.Finisher=="CausticWax"then survival=.25^c.Tail end
+                accumulate(conditional(c.Route,c.Chain),survival)
+            end
+            local steps=clone(route.Steps)
+            if #c.Chain>0 then steps[#steps+1]=table.concat(c.Chain," > ")end
+            return {Chain=clone(c.Chain),Steps=steps,Kind=route.Kind,ResetOffset=route.File.RC or 0,
+                TurpentineCount=route.Turps,FillerSoftCount=route.Soft,WaxCount=route.Soft+#c.Chain,
+                TargetChance=chance,SurvivalChance=survival,ConditionalChance=survival>0 and chance/survival or 0,Groups=groups}
+        end)
+        if not ok then
+            if stop() or tostring(row):find("time limit",1,true)then timedOut=not stopped;break end
+            error(row,0)
+        end
+        rows[#rows+1]=row
+        task.wait()
+    end
+    table.sort(rows,function(a,b)
+        if math.abs(a.TargetChance-b.TargetChance)>1e-12 then return a.TargetChance>b.TargetChance end
+        if a.TurpentineCount~=b.TurpentineCount then return a.TurpentineCount<b.TurpentineCount end
+        if a.WaxCount~=b.WaxCount then return a.WaxCount<b.WaxCount end
+        return table.concat(a.Steps,">")<table.concat(b.Steps,">")
+    end)
+    local offsets={}
+    for _,row in ipairs(rows)do
+        local key=row.Kind..":"..row.ResetOffset
+        if not offsets[key]then offsets[key]=row end
+    end
+    local offsetRows={};for _,row in pairs(offsets)do offsetRows[#offsetRows+1]=row end
+    table.sort(offsetRows,function(a,b)if a.ResetOffset==b.ResetOffset then return a.Kind<b.Kind end;return a.ResetOffset<b.ResetOffset end)
+    return {Rows=rows,Offsets=offsetRows,Completed=#rows,Candidates=#candidates,Stopped=stopped,TimedOut=timedOut,
+        Seconds=os.clock()-started,MaxResets=maxResets,CausticRequired=causticRequired,GroupedOverflow=groupedOverflow,Complete=#rows==#candidates}
+end
+
 -- Lists only the current player's locally replicated inventory, without IDs.
 function Engine.Inventory()
     local stats = require(RS.ClientStatCache):Get()
