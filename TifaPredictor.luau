@@ -333,6 +333,79 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
     return report
 end
 
+-- Compare short setup chains for a target. Non-destructive Hard failures are
+-- included; destructive failures contribute zero target probability.
+function Engine.Guide(data, finishingWax, matchesTarget, options)
+    options=options or {}
+    assert(type(matchesTarget)=="function","Choose at least one target")
+    waxDefinition(finishingWax)
+    local file=detached(data,options)
+    local remaining=5-#(file.W or {})
+    assert(remaining>0,"No slots left. Choose an unwaxed item or enable a simulated reset in Options.")
+    local baseline=snapshot(file)
+    local candidates={{finishingWax},{"SoftWax",finishingWax},{"HardWax",finishingWax},
+        {"SoftWax","SoftWax",finishingWax},{"SoftWax","HardWax",finishingWax},
+        {"HardWax","SoftWax",finishingWax}}
+    local memo,seen,rows={},{},{}
+    local function checkCancel()
+        if options.Cancelled and options.Cancelled() then error("Guide cancelled",0) end
+    end
+    local function conditionalRate(successful)
+        if #successful==0 then return matchesTarget(baseline,baseline) and 1 or 0 end
+        local key=table.concat(successful,">")
+        if memo[key]~=nil then return memo[key] end
+        local opts=table.clone(options)
+        local label=table.concat(successful," > ")
+        opts.OnStage=function(message)if options.OnStage then options.OnStage(label.." · "..message) end end
+        local batch=Engine.Batch(data,successful,function(result)return matchesTarget(result,baseline)end,nil,opts)
+        memo[key]=batch.ConditionalMatchRate
+        return memo[key]
+    end
+    for _,chain in ipairs(candidates) do
+        checkCancel()
+        local label=table.concat(chain," > ")
+        if #chain<=remaining and not seen[label] then
+            seen[label]=true
+            if options.OnStage then options.OnStage("Comparing "..label) end
+            local chance,survival=0,0
+            local successful={}
+            local function outcomes(index,mass)
+                checkCancel()
+                if index>#chain then
+                    survival+=mass
+                    chance+=mass*conditionalRate(successful)
+                    return
+                end
+                local wax=waxDefinition(chain[index])
+                local rate=wax.SuccessRate or 1
+                if rate>0 then
+                    successful[#successful+1]=chain[index]
+                    outcomes(index+1,mass*rate)
+                    successful[#successful]=nil
+                end
+                if rate<1 and not wax.DestroyOnFail then
+                    -- A failed Hard wax occupies a slot but has no stat or
+                    -- seeded-RNG effect. Its slot was counted by #chain above.
+                    outcomes(index+1,mass*(1-rate))
+                end
+            end
+            outcomes(1,1)
+            rows[#rows+1]={Chain=table.clone(chain),Slots=#chain,TargetChance=chance,
+                SurvivalChance=survival,TargetGivenSurvival=survival>0 and chance/survival or 0}
+            task.wait()
+        end
+    end
+    table.sort(rows,function(a,b)
+        if math.abs(a.TargetChance-b.TargetChance)<1e-12 then
+            if a.Slots~=b.Slots then return a.Slots<b.Slots end
+            return table.concat(a.Chain,">")<table.concat(b.Chain,">")
+        end
+        return a.TargetChance>b.TargetChance
+    end)
+    return {Rows=rows,Baseline=baseline,RemainingSlots=remaining,FinishingWax=finishingWax,
+        AllSelectedTargets=true,IncludesNonDestructiveFailures=true}
+end
+
 -- Lists only the current player's locally replicated inventory, without IDs.
 function Engine.Inventory()
     local stats = require(RS.ClientStatCache):Get()
@@ -391,7 +464,7 @@ local C = {bg=Color3.fromRGB(17,18,17),panel=Color3.fromRGB(25,27,25),button=Col
     text=Color3.fromRGB(202,205,202),muted=Color3.fromRGB(126,132,126),green=Color3.fromRGB(147,255,126),
     active=Color3.fromRGB(40,97,37),blue=Color3.fromRGB(49,100,153),purple=Color3.fromRGB(65,55,117),red=Color3.fromRGB(119,48,51)}
 local state={source="Storage",index=1,tab="BATCH",wax="SoftWax",chain={},filters={},showBase=false,currentSeed=true,resetFirst=false,
-    busy=false,cancelled=false,alive=true,items={},result="Choose an item, then START.",imported=nil,showItems=true}
+    busy=false,cancelled=false,alive=true,items={},result="Choose an item, then START.",imported=nil,showItems=true,advanced=false}
 local connections={}
 local function connect(signal,fn) local c=signal:Connect(fn);connections[#connections+1]=c;return c end
 local function make(class,parent,props)
@@ -451,7 +524,7 @@ skipPrev.BackgroundColor3=C.panel;skip.BackgroundColor3=C.panel;skipNext.Backgro
 local baseButton=button(window,"ShowBase","○  Show base",520,45,72,23)
 baseButton.BackgroundTransparency=1;baseButton.Font=Enum.Font.Gotham;baseButton.TextSize=9
 local tabs={}
-for i,name in ipairs({"SINGLE","BATCH","EXPLORE"}) do tabs[name]=button(window,name,name,10+(i-1)*65,75,60,25) end
+for i,name in ipairs({"SINGLE","BATCH","EXPLORE","GUIDE"}) do tabs[name]=button(window,name,name,10+(i-1)*65,75,60,25) end
 local function pane(name,x,w)
     local p=make("Frame",window,{Name=name,Position=UDim2.fromOffset(x,106),Size=UDim2.fromOffset(w,280),
         BackgroundColor3=C.panel,BorderSizePixel=0});round(p);return p
@@ -459,7 +532,7 @@ end
 local left=pane("CurrentPane",10,190);left.Size=UDim2.fromOffset(190,330)
 local middle=pane("FilterPane",205,160)
 local right=pane("ResultsPane",370,220)
-label(middle,"Heading","SELECT FILTERS:",7,7,147,15,9,C.muted)
+local filterHeading=label(middle,"Heading","FILTERS (ANY)",7,7,147,15,9,C.muted)
 local resultHeading=label(right,"Heading","PREDICTION RESULTS",10,7,200,15,10,C.muted)
 local function scroll(parent,name,x,y,w,h)
     return make("ScrollingFrame",parent,{Name=name,Position=UDim2.fromOffset(x,y),Size=UDim2.fromOffset(w,h),
@@ -506,10 +579,20 @@ local hideItems=button(inventoryPanel,"HideItems","×",233,8,21,20);hideItems.Ba
 local inventoryScroll=scroll(inventoryPanel,"Cards",7,36,251,406)
 local cardConnections={}
 local renderInventory
-local resetFirst=button(window,"ResetFirst","RESET FIRST: OFF",210,77,139,21)
-resetFirst.Font=Enum.Font.Gotham;resetFirst.TextSize=9
-local baseCaption=label(window,"BaseOffsetCaption","BASE OFFSET",360,77,75,21,8,C.muted)
-local baseOffsetInput=input(window,"BaseOffset","0",438,77,49,21)
+local advancedButton=button(window,"Options","OPTIONS",275,77,84,21)
+local planningSummary=label(window,"PlanningSummary","Keep waxes",370,77,220,21,9,C.muted)
+local advancedPanel=make("Frame",window,{Name="AdvancedPanel",Position=UDim2.fromOffset(275,104),
+    Size=UDim2.fromOffset(235,177),BackgroundColor3=C.button,BorderSizePixel=0,ZIndex=12,Visible=false})
+round(advancedPanel)
+label(advancedPanel,"Title","Planning options",10,7,200,21,11,C.green)
+local optionsClose=button(advancedPanel,"Close","×",207,7,19,21)
+local resetFirst=button(advancedPanel,"ResetFirst","○ Reset before search",10,35,215,25)
+resetFirst.Font=Enum.Font.Gotham;resetFirst.TextSize=10
+local baseCaption=label(advancedPanel,"BaseOffsetCaption","Base RNG offset",10,70,130,23,10,C.muted)
+local baseOffsetInput=input(advancedPanel,"BaseOffset","0",151,70,74,23)
+seed.Parent=advancedPanel;seed.Position=UDim2.fromOffset(10,103);seed.Size=UDim2.fromOffset(215,24)
+local optionHint=label(advancedPanel,"Hint","Changes affect the simulation only.",10,138,215,28,9,C.muted)
+optionHint.TextWrapped=true
 local help=button(window,"Help","?",509,7,22,20);help.BackgroundTransparency=1
 local filterDefs={}
 local function notify(text) if state.alive then status.Text=text end end
@@ -609,11 +692,28 @@ local function setResults(text)
     if text:find("=== BATCH MATCHES ===",1,true)==1 and predictionStart then
         visibleText=text:sub(predictionStart+#"=== MATCHED PREDICTIONS ==="+1)
     end
+    if text:find("WAXING GUIDE\n",1,true)==1 then
+        local recommendation=text:find("Best choice:",1,true) or text:find("No target improvement",1,true)
+        if recommendation then visibleText=text:sub(recommendation) end
+        visibleText=visibleText:gsub("\nIf item survives:[^\n]*", "")
+        local footer=visibleText:find("Compared ",1,true)
+        if footer then visibleText=visibleText:sub(1,footer-1).."Short setup chains · simulated chances" end
+    end
     for line in (visibleText.."\n"):gmatch("(.-)\n") do
-        local safe=line:gsub("&","&amp;"):gsub("<","&lt;"):gsub(">","&gt;")
+        local visual=line
+        visual=visual:gsub("([%d]+%.[%d]+)%%",function(value)
+            local n=tonumber(value)
+            if n>0 and n<0.1 then return "<0.1%" end
+            return string.format("%.1f%%",n)
+        end)
+        visual=visual:gsub("^Total predicts %-%-> ","Outcomes: "):gsub("^Matched %-%-> ","Matches: ")
+        visual=visual:gsub("^%-%-%- INDIVIDUAL CHANCES %-%-%-$","STAT CHANCES")
+            :gsub("^%-%-%- COMBINATIONS %-%-%-$","OUTCOMES")
+        if visual:sub(1,1)=="[" and visual:sub(-1)=="]" then visual=visual:sub(2,-2) end
+        local safe=visual:gsub("&","&amp;"):gsub("<","&lt;"):gsub(">","&gt;")
         if line:find("INDIVIDUAL CHANCES",1,true) or line:find("COMBINATIONS",1,true) then
             safe='<font color="#4386b8">'..safe..'</font>'
-        elseif line:find("Total predicts",1,true) or line:find("Matches:",1,true) then
+        elseif line:find("Total predicts",1,true) or line:find("Matches:",1,true) or line:find("Best choice:",1,true) then
             safe='<font color="#93ff7e">'..safe..'</font>'
         end
         colored[#colored+1]=safe
@@ -631,8 +731,8 @@ local function refreshCurrent()
     local ok,s=pcall(E.Evaluate,item.Data,displayOptions)
     if not ok then setText(currentText,currentScroll,tostring(s));return end
     local lines={"CUR | W: "..#s.WaxHistory.."/5",item.Data.T,"",
-        "Base offset: "..s.BaseOffset,"Offset after turp: "..s.OffsetAfterTurp,"Current offset: "..s.CurrentOffset,"-------------------------","",
-        "Potential: "..string.format("%.3f",s.Quality*5),"","-------------------------","",describe(s)}
+        "Base offset: "..s.BaseOffset,"Offset after turp: "..s.OffsetAfterTurp,"Current offset: "..s.CurrentOffset,"",
+        "Potential: "..string.format("%.3f",s.Quality*5),"",describe(s)}
     setText(currentText,currentScroll,table.concat(lines,"\n"))
 end
 local function refreshFilters()
@@ -675,29 +775,39 @@ local function reloadItems()
 end
 local function redraw()
     for name,b in pairs(tabs) do b.BackgroundColor3=name==state.tab and Color3.fromRGB(49,52,49) or C.panel end
-    local explore=state.tab=="EXPLORE";local batch=state.tab=="BATCH"
+    local explore=state.tab=="EXPLORE";local batch=state.tab=="BATCH";local guide=state.tab=="GUIDE"
     chainLabel.Visible=batch;add.Visible=batch;remove.Visible=batch;clear.Visible=batch;copy.Visible=not explore
-    viewStats.Visible=not batch
+    viewStats.Visible=not batch and not guide
     stepsLabel.Visible=explore;steps.Visible=explore;offsetLabel.Visible=explore;offset.Visible=explore
-    zoom.Visible=explore;seed.Visible=explore;copyExplore.Visible=explore
-    if not batch and not explore then chainLabel.Visible=true;chainLabel.Text="One wax type · quantity above · all 32^N skip combinations" end
-    resetFirst.Visible=not explore
-    resetFirst.Text=state.resetFirst and "RESET FIRST: ON" or "RESET FIRST: OFF"
+    zoom.Visible=explore;seed.Visible=true;copyExplore.Visible=explore
+    if not batch and not explore and not guide then chainLabel.Visible=true;chainLabel.Text="Choose wax and count, then START" end
+    resetFirst.Visible=true
+    resetFirst.Text=(state.resetFirst and "●" or "○").." Reset before search"
     resetFirst.BackgroundColor3=state.resetFirst and C.active or C.panel
+    advancedPanel.Visible=state.advanced
+    advancedButton.BackgroundColor3=state.advanced and C.active or C.button
+    local baseValue=tonumber(baseOffsetInput.Text) or 0
+    planningSummary.Text=(state.resetFirst and "After reset" or "Keep waxes")..(baseValue~=0 and " · offset "..baseValue or "")
+    planningSummary.TextColor3=state.resetFirst and C.green or C.muted
+    skipTrack.Visible=not guide;skipPrev.Visible=not guide;skip.Visible=not guide;skipNext.Visible=not guide
+    window.WaxQuantityCaption.Visible=not guide
+    filterHeading.Text=guide and "TARGETS (ALL)" or "FILTERS (ANY)"
+    if guide then chainLabel.Visible=true;chainLabel.Text="Choose targets + finishing wax, then COMPARE" end
+    if not state.busy then start.Text=guide and "COMPARE" or "START" end
     if explore then
-        seed.Position=UDim2.fromOffset(210,77);seed.Size=UDim2.fromOffset(140,21)
         copyExplore.Position=UDim2.fromOffset(379,416);copyExplore.Size=UDim2.fromOffset(76,22)
     end
     if batch then chainLabel.Text="CHAIN: "..(#state.chain>0 and table.concat(state.chain, " > ") or "ADD waxes to begin") end
     baseButton.Text=(state.showBase and "●" or "○").."  Show base"
     seed.Text=(state.currentSeed and "● Current / swirled seed" or "○ Original seed")
-    wax.Text=state.wax;resultHeading.Text=explore and "EXPLORE RESULTS" or batch and "MATCHED RESULTS" or "PREDICTION RESULTS"
+    wax.Text=state.wax;resultHeading.Text=guide and "WAXING GUIDE" or explore and "EXPLORE RESULTS" or "MATCHED RESULTS"
+    waxCaption.Text=guide and "FINISH WAX" or "WAX"
 end
 local function copyText(text)
     if type(setclipboard)=="function" then local ok,err=pcall(setclipboard,text);notify(ok and "Copied to clipboard." or tostring(err))
     else notify("Clipboard unavailable in this executor.") end
 end
-local function changed() popup.Visible=false;selector.Visible=false;refreshCurrent();refreshFilters();setResults("Choose filters or press START.") end
+local function changed() popup.Visible=false;selector.Visible=false;state.advanced=false;advancedPanel.Visible=false;refreshCurrent();refreshFilters();setResults("Choose filters or press START.") end
 renderInventory=function()
     for _,c in ipairs(cardConnections) do c:Disconnect() end
     cardConnections={}
@@ -753,7 +863,7 @@ end
 connect(itemsToggle.Activated,toggleInventory)
 connect(hideItems.Activated,toggleInventory)
 local function openSelector(kind,x,width,entries,choose)
-    popup.Visible=false
+    popup.Visible=false;state.advanced=false;advancedPanel.Visible=false
     if selector.Visible and selector:GetAttribute("Kind")==kind then selector.Visible=false;return end
     for _,v in ipairs(selector:GetChildren()) do if v:IsA("GuiObject") then v:Destroy() end end
     selector:SetAttribute("Kind",kind);selector.Position=UDim2.fromOffset(x,72)
@@ -792,7 +902,7 @@ connect(skipPrev.Activated,function()if editable() then skip.Text=tostring(((ton
 connect(skipNext.Activated,function()if editable() then skip.Text=tostring((tonumber(skip.Text) or 1)%5+1) end end)
 connect(baseButton.Activated,function()if editable() then state.showBase=not state.showBase;refreshCurrent();redraw() end end)
 connect(seed.Activated,function()if editable() then state.currentSeed=not state.currentSeed;refreshCurrent();redraw() end end)
-for name,b in pairs(tabs) do connect(b.Activated,function()if editable() then state.tab=name;popup.Visible=false;selector.Visible=false;redraw() end end) end
+for name,b in pairs(tabs) do connect(b.Activated,function()if editable() then state.tab=name;state.advanced=false;popup.Visible=false;selector.Visible=false;redraw() end end) end
 connect(add.Activated,function()if editable() then
     local quantity=tonumber(skip.Text)
     if not quantity or quantity%1~=0 or quantity<1 or quantity>5 then notify("Wax quantity must be 1–5.");return end
@@ -842,11 +952,13 @@ connect(resetFirst.Activated,function()
         notify(state.resetFirst and "Plan starts after a simulated Turpentine reset. Real item unchanged." or "Plan preserves all existing waxes.") end
 end)
 connect(baseOffsetInput.FocusLost,function()
-    if editable() then refreshCurrent() end
+    if editable() then refreshCurrent();redraw() end
 end)
+connect(advancedButton.Activated,function()if editable() then state.advanced=not state.advanced;popup.Visible=false;selector.Visible=false;redraw() end end)
+connect(optionsClose.Activated,function()state.advanced=false;redraw()end)
 connect(help.Activated,function()
     if not editable() then return end
-    setResults("HOW TO USE\n\n1. Choose source and item.\n2. Choose wax; arrows choose QUANTITY (1–5).\n3. SINGLE searches one wax type; BATCH uses ADD to build a mixed chain.\n4. Pick stat filters. Any selected improvement counts as a match.\n5. Keep RESET FIRST off to preserve existing waxes. Turn it on only for a hypothetical reset.\n6. START searches every offset combination; STOP cancels.\n7. COPY REPORT copies every grouped outcome, even if the display is shortened.\n\nBASE OFFSET skips RNG calls before base stat generation. These counters are instrumented; Greg label parity is unverified.\n\nFour/five-step runs may hit memory or time limits. An incomplete run produces an error, never invented percentages. DebugWax is a simulation-only game definition.\n\nNo real items or waxes are changed.")
+    setResults("QUICK HELP\n\nBATCH\nChoose wax/count → ADD → filters → START. Any selected improvement counts. COPY REPORT keeps exact counts and six-decimal percentages; the screen rounds them.\n\nGUIDE\nSelect target abilities/stats and a finishing wax, then COMPARE. ALL targets must improve. It compares the finishing wax alone with Soft/Hard setup chains of up to three steps. Target + survival includes wax failure risk. It does not promise Soft first is better.\n\nOPTIONS\nReset before search is a simulated Turpentine reset; your item is unchanged. Base RNG offset and known current/original seed selection are advanced controls. Offset labels are not verified Greg equivalents.\n\nBatch chances assume successful waxes; chain success is shown separately. Guide includes non-destructive failures and treats destruction as a miss. DebugWax is simulation-only.\n\nSTOP cancels. Limits stop incomplete searches without returning partial probabilities.")
 end)
 local function number(text,min,max,labelText)
     local n=tonumber(text);assert(n and n%1==0 and n>=min and n<=max,labelText.." must be "..min.."–"..max);return n
@@ -854,14 +966,14 @@ end
 connect(start.Activated,function()
     if state.busy then state.cancelled=true;notify("Stopping…");return end
     local item=selected();if not item then notify("Choose or import a Beequip first.");return end
-    state.busy=true;state.cancelled=false;start.Text="STOP";popup.Visible=false;selector.Visible=false
+    state.busy=true;state.cancelled=false;start.Text="STOP";popup.Visible=false;selector.Visible=false;state.advanced=false;advancedPanel.Visible=false
     local chosen={}
     for i,f in ipairs(filterDefs) do if state.filters[i] then chosen[#chosen+1]=f end end
     local opts=options()
     opts.Cancelled=function()return state.cancelled or not state.alive end
     opts.OnProgress=function(done,total)notify(string.format("Counted %s / %s offset combinations",done,total))end
     opts.OnStage=notify
-    setResults("Searching every offset combination…\nSTOP cancels the search.\nNo wax or Turpentine will be used.")
+    setResults("Searching…\nPress STOP to cancel.")
     task.spawn(function()
         local ok,err=xpcall(function()
             if state.tab=="SINGLE" or state.tab=="BATCH" then
@@ -919,9 +1031,11 @@ connect(start.Activated,function()
                 lines[#lines+1]="";lines[#lines+1]="=== MATCHED PREDICTIONS ==="
                 lines[#lines+1]="Total predicts --> "..report.Total
                 lines[#lines+1]="Matched --> "..report.Matched.." ("..percent(report.Matched,report.Total)..")"
+                lines[#lines+1]="Successful-wax outcomes · chain success "..percent(report.AllWaxesSuccessRate,1)
+                lines[#lines+1]=""
                 lines[#lines+1]="--- INDIVIDUAL CHANCES ---"
                 for i,f in ipairs(chosen) do lines[#lines+1]=f.label..": "..percent(hits[i],report.Total) end
-                if #chosen==0 then lines[#lines+1]="No filters selected: listing all outcome combinations." end
+                if #chosen==0 then lines[#lines+1]="All outcomes" end
                 lines[#lines+1]="--- COMBINATIONS ---"
                 local groups={};for text,count in pairs(report.Groups) do groups[#groups+1]={text=text,count=count} end
                 table.sort(groups,function(a,b)if a.count==b.count then return a.text<b.text end;return a.count>b.count end)
@@ -930,18 +1044,41 @@ connect(start.Activated,function()
                     lines[#lines+1]="Found: "..g.count.." ("..percent(g.count,report.Total)..")"
                     lines[#lines+1]=""
                 end
-                lines[#lines+1]="=== METHOD ==="
-                lines[#lines+1]="Exact counts; 32 equally weighted skips per successful future wax."
-                lines[#lines+1]="Percentages use total branches as denominator; displayed to 6 decimal places."
-                lines[#lines+1]="Stat probabilities are conditional on ALL added waxes succeeding."
-                lines[#lines+1]="Filters compare against the planning start (after reset when enabled)."
-                lines[#lines+1]="All-wax success: "..percent(report.AllWaxesSuccessRate,1)
-                lines[#lines+1]="Offsets are instrumented RNG-draw positions, not verified Greg-label equivalents."
-                lines[#lines+1]="Offset after turp counts base generation plus RC; current offset counts all draws."
-                lines[#lines+1]="Planning start: W "..#report.Before.WaxHistory.."/5; RC "..report.Before.TurpentineOffset.."; RNG offset "..report.Before.CurrentOffset
-                lines[#lines+1]="Equivalent RNG/count/value states were merged without changing branch weights."
-                lines[#lines+1]="Distinct states: "..report.DistinctStates.."; time: "..string.format("%.3fs",report.Seconds)
-                lines[#lines+1]="No real wax or Turpentine was used."
+                setResults(table.concat(lines,"\n"))
+            elseif state.tab=="GUIDE" then
+                assert(#chosen>0,"Select the ability or stats you want in TARGETS first")
+                local function matches(result,baseline)
+                    for _,f in ipairs(chosen) do
+                        if statValue(result,f)<=statValue(baseline,f)+1e-9 then return false end
+                    end
+                    return true
+                end
+                local guide=E.Guide(item.Data,state.wax,matches,opts)
+                local function pct(value)
+                    return (string.format("%.6f",value*100):gsub("0+$",""):gsub("%.$","")).."%"
+                end
+                local lines={"WAXING GUIDE",item.Data.T,""}
+                local names={};for _,f in ipairs(chosen)do names[#names+1]=f.label end
+                lines[#lines+1]="Targets: "..table.concat(names," + ")
+                lines[#lines+1]="All targets must improve."
+                lines[#lines+1]="Finish with: "..state.wax
+                lines[#lines+1]="Plan: "..(state.resetFirst and "after a simulated reset" or "keep existing waxes")
+                lines[#lines+1]=""
+                if guide.Rows[1] and guide.Rows[1].TargetChance>0 then
+                    lines[#lines+1]="Best choice: "..table.concat(guide.Rows[1].Chain," > ")
+                else lines[#lines+1]="No target improvement found in these plans." end
+                lines[#lines+1]=""
+                for i,row in ipairs(guide.Rows) do
+                    lines[#lines+1]=i..". "..table.concat(row.Chain," > ")
+                    lines[#lines+1]="Target + survival: "..pct(row.TargetChance)
+                    lines[#lines+1]="If item survives: "..pct(row.TargetGivenSurvival)
+                    lines[#lines+1]="Survival: "..pct(row.SurvivalChance).." · "..row.Slots.." slot(s)"
+                    lines[#lines+1]=""
+                end
+                lines[#lines+1]="Compared "..#guide.Rows.." setup chains (1–3 steps), not every possible plan."
+                lines[#lines+1]="Soft advances the seeded RNG by a random skip plus upgrade rolls. It also changes upgrade pools."
+                lines[#lines+1]="Hard failures are included; destroyed items count as misses."
+                lines[#lines+1]="No guaranteed offset sequence. No real wax used."
                 setResults(table.concat(lines,"\n"))
             else
                 local count=number(steps.Text,1,1000,"Steps");local base=number(offset.Text,0,100000,"Offset")
@@ -961,9 +1098,9 @@ connect(start.Activated,function()
         end,function(e)return tostring(e)end)
         state.busy=false
         if state.alive then
-            start.Text="START"
+            start.Text=state.tab=="GUIDE" and "COMPARE" or "START"
             if not ok then setResults("=== SEARCH INCOMPLETE ===\n"..err.."\n\nNo counts or percentages were produced for this run.") end
-            notify(ok and "Simulation complete · no wax consumed." or err)
+            notify(ok and "Done" or err)
         end
     end)
 end)

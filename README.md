@@ -18,6 +18,8 @@ Run inside the supported game/executor context. The query parameter helps avoid 
 - Exact weighted batch counts, most-likely-first outcome groups, percentages and full plain-text report copying.
 - Existing wax history preserved unless RESET FIRST is explicitly enabled for a simulated reset.
 - Stop/progress controls and explicit limits for expensive searches.
+- Target Guide compares Soft/Hard setup chains for chosen abilities or stats, including survival risk.
+- Cleaner results without a Method section; advanced controls are under Options.
 
 No real waxes or Turpentine are used. The code does not fire inventory remotes or modify the original predictor’s authentication. It is a new simulation implementation, not a full deobfuscation of Greg’s script.
 

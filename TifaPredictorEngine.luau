@@ -331,6 +331,79 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
     return report
 end
 
+-- Compare short setup chains for a target. Non-destructive Hard failures are
+-- included; destructive failures contribute zero target probability.
+function Engine.Guide(data, finishingWax, matchesTarget, options)
+    options=options or {}
+    assert(type(matchesTarget)=="function","Choose at least one target")
+    waxDefinition(finishingWax)
+    local file=detached(data,options)
+    local remaining=5-#(file.W or {})
+    assert(remaining>0,"No slots left. Choose an unwaxed item or enable a simulated reset in Options.")
+    local baseline=snapshot(file)
+    local candidates={{finishingWax},{"SoftWax",finishingWax},{"HardWax",finishingWax},
+        {"SoftWax","SoftWax",finishingWax},{"SoftWax","HardWax",finishingWax},
+        {"HardWax","SoftWax",finishingWax}}
+    local memo,seen,rows={},{},{}
+    local function checkCancel()
+        if options.Cancelled and options.Cancelled() then error("Guide cancelled",0) end
+    end
+    local function conditionalRate(successful)
+        if #successful==0 then return matchesTarget(baseline,baseline) and 1 or 0 end
+        local key=table.concat(successful,">")
+        if memo[key]~=nil then return memo[key] end
+        local opts=table.clone(options)
+        local label=table.concat(successful," > ")
+        opts.OnStage=function(message)if options.OnStage then options.OnStage(label.." · "..message) end end
+        local batch=Engine.Batch(data,successful,function(result)return matchesTarget(result,baseline)end,nil,opts)
+        memo[key]=batch.ConditionalMatchRate
+        return memo[key]
+    end
+    for _,chain in ipairs(candidates) do
+        checkCancel()
+        local label=table.concat(chain," > ")
+        if #chain<=remaining and not seen[label] then
+            seen[label]=true
+            if options.OnStage then options.OnStage("Comparing "..label) end
+            local chance,survival=0,0
+            local successful={}
+            local function outcomes(index,mass)
+                checkCancel()
+                if index>#chain then
+                    survival+=mass
+                    chance+=mass*conditionalRate(successful)
+                    return
+                end
+                local wax=waxDefinition(chain[index])
+                local rate=wax.SuccessRate or 1
+                if rate>0 then
+                    successful[#successful+1]=chain[index]
+                    outcomes(index+1,mass*rate)
+                    successful[#successful]=nil
+                end
+                if rate<1 and not wax.DestroyOnFail then
+                    -- A failed Hard wax occupies a slot but has no stat or
+                    -- seeded-RNG effect. Its slot was counted by #chain above.
+                    outcomes(index+1,mass*(1-rate))
+                end
+            end
+            outcomes(1,1)
+            rows[#rows+1]={Chain=table.clone(chain),Slots=#chain,TargetChance=chance,
+                SurvivalChance=survival,TargetGivenSurvival=survival>0 and chance/survival or 0}
+            task.wait()
+        end
+    end
+    table.sort(rows,function(a,b)
+        if math.abs(a.TargetChance-b.TargetChance)<1e-12 then
+            if a.Slots~=b.Slots then return a.Slots<b.Slots end
+            return table.concat(a.Chain,">")<table.concat(b.Chain,">")
+        end
+        return a.TargetChance>b.TargetChance
+    end)
+    return {Rows=rows,Baseline=baseline,RemainingSlots=remaining,FinishingWax=finishingWax,
+        AllSelectedTargets=true,IncludesNonDestructiveFailures=true}
+end
+
 -- Lists only the current player's locally replicated inventory, without IDs.
 function Engine.Inventory()
     local stats = require(RS.ClientStatCache):Get()

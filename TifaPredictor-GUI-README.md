@@ -49,3 +49,13 @@ Complex four/five-step chains can exceed the default 200,000-state or 120-second
 The sidebar displays the current source’s items with game-native Beequip images, names, potential, five wax-history slots, and a wax count. Failed waxes are marked with a red cross. Click a card to select it. The green outline marks the current selection. ITEMS (or the sidebar close button) toggles the panel; the combined layout scales to the viewport. Images are referenced through the game’s BeequipTypes and WaxTypes asset IDs; no external image download is needed.
 
 The GitHub main loader is updated with each completed change, as requested. Its entry point is the readable TifaPredictor.luau bundle.
+
+## Simplified UI and target guide
+
+The Method section is removed. The screen uses compact headings and rounded percentages; COPY REPORT retains exact counts and six-decimal percentages. Reset, seed selection and base RNG offset are behind OPTIONS. Existing offset definitions and limitations are unchanged.
+
+GUIDE: select desired ability/stat filters, choose the finishing wax, and press COMPARE. ALL selected targets must improve. It compares the finisher alone, Soft → finisher, Hard → finisher, Soft → Soft → finisher, Soft → Hard → finisher and Hard → Soft → finisher, subject to remaining slots. These are six short candidate chains, not a global optimum over all possible plans.
+
+Chains are ranked by target-and-survival probability. Non-destructive Hard failures are included; destructive failures count as misses. The copied guide includes conditional target chance given survival as well as overall chance. Soft is not assumed to improve the result: it advances the seeded RNG and changes upgrades/pools, and the effect is calculated for the selected item.
+
+The guide does not reveal or guarantee the next server skip. A test of a Bottle Cap fixture independently verified all three eligible Caustic-finishing chains, including the Hard-failure mixture; the input stayed unchanged. Live GUI tests verified Guide, Options, rounded screen percentages, exact copied values, and removal of Method text.
