@@ -268,6 +268,123 @@ function Engine.HiveOffsetOutcomes(data,waxName,firstOffset,count,options)
     return {Rows=rows,CurrentOffset=file.RC or 0,CumulativeAttempts=file.UC,FirstOffset=firstOffset,Count=count}
 end
 
+-- Every RC reachable using only Soft setup and at most maxResets resets.
+-- This is a bounded reachable-offset view, not a claim that offsets end forever.
+function Engine.AllOffsetBonuses(data,maxResets,options)
+    options=table.clone(options or {})
+    assert(maxResets%1==0 and maxResets>=0 and maxResets<=10,"Choose 0..10 resets")
+    options.ResetWaxes=false;options.ShowBase=false;options.UseOriginalSeed=false;options.BaseOffset=0
+    local initial=detached(data,options)
+    local counter=initial.UC
+    if counter==nil then
+        assert((initial.RC or 0)==0,"Missing UC: refresh the item before finding reachable offsets")
+        counter=0;for _,w in ipairs(initial.W or {})do if w[1]~=4 then counter+=1 end end
+    end
+    local routes={{File=initial,Kind="Current",Offset=initial.RC or 0,Steps={},Turps=0,Soft=0}}
+    local remaining=5-#(initial.W or {})
+    if maxResets>0 then
+        local first=counter+(#(initial.W or {})>0 and 0 or 1)
+        local last=counter+remaining+5*(maxResets-1)
+        assert(last<=100000,"Reachable offset exceeds supported range")
+        for rc=first,last do
+            local left=rc-counter
+            local steps,turps,soft={},0,left
+            local fill=math.min(remaining,left)
+            if fill>0 then steps[#steps+1]="SoftWax ×"..fill end
+            turps+=1;left-=fill
+            steps[#steps+1]="Turpentine → RC "..(counter+fill)
+            local reached=counter+fill
+            while left>0 do
+                local n=math.min(5,left)
+                steps[#steps+1]="SoftWax ×"..n;reached+=n;left-=n;turps+=1
+                steps[#steps+1]="Turpentine → RC "..reached
+            end
+            assert(turps<=maxResets,"Reset reachability mismatch")
+            local file=clone(initial);file.W=nil;file.S=file.OS or file.S;file.RC=rc;file.UC=rc
+            routes[#routes+1]={File=file,Kind="After reset",Offset=rc,Steps=steps,Turps=turps,Soft=soft}
+        end
+    end
+    local rows={}
+    local totalWork=#routes*5
+    local work=0
+    for _,route in ipairs(routes)do
+        if options.Cancelled and options.Cancelled()then error("Prediction cancelled",0)end
+        local traits={}
+        local function addResult(result,wax,mass,skip,rate,survival,weight,total)
+            local function add(key,kind,sample,value)
+                if value==0 then return end
+                local trait=traits[key]
+                if not trait then trait={Kind=kind,Name=kind=="Ability" and sample or sample.Type,Values={},BestValue=value};traits[key]=trait end
+                trait.BestValue=math.max(trait.BestValue,value)
+                local level=trait.Values[value]
+                if not level then level={Value=value,Sample=sample,Options={}};trait.Values[value]=level end
+                local way=level.Options[wax]
+                if not way then way={Wax=wax,Probability=0,SuccessRate=rate,Survival=survival,Hits=0,Total=total or 32,Skips={},FailurePreserves=false};level.Options[wax]=way end
+                way.Probability+=mass
+                if skip then way.Hits+=weight or 1;if type(skip)=="number"then way.Skips[#way.Skips+1]=skip end
+                elseif wax~="Already present"then way.FailurePreserves=true end
+            end
+            for _,v in ipairs(result.Hive)do add(tag({HiveBonusStat=v.Type,Op=v.Op,Params=v.Params}),"Hive",v,v.Value)end
+            for _,v in ipairs(result.Abilities)do add("A:"..v[1],"Ability",v[1],1)end
+        end
+        local before=snapshot(route.File)
+        addResult(before,"Already present",1,nil,1,1)
+        for _,wax in ipairs({"SoftWax","HardWax","CausticWax"})do
+            if #(route.File.W or {})<5 then
+                local opts=table.clone(options);opts.OnProgress=nil
+                local outcomes=Engine.OffsetOutcomes(route.File,wax,nil,opts)
+                local rate=outcomes.WaxSuccessRate
+                local survival=outcomes.DestroyOnFailure and rate or 1
+                for _,branch in ipairs(outcomes.Rows)do addResult(branch.Result,wax,rate/32,branch.Skip,rate,survival)end
+                if rate<1 and not outcomes.DestroyOnFailure then addResult(before,wax,1-rate,nil,rate,survival)end
+            end
+            work+=1
+            if options.OnProgress then options.OnProgress(work,totalWork)end
+        end
+        -- Cheap two-step finishers cover another Soft before Hard/Caustic.
+        -- A failed Hard keeps the first Soft result, including its late ability rolls.
+        for _,finisher in ipairs({"HardWax","CausticWax"})do
+            if #(route.File.W or {})<=3 then
+                local rate=finisher=="HardWax" and .6 or .25
+                local survival=finisher=="HardWax" and 1 or .25
+                local label="SoftWax → "..finisher
+                local opts=table.clone(options);opts.Targets=nil;opts.OnProgress=nil;opts.OnStage=nil
+                Engine.Batch(route.File,{"SoftWax",finisher},function(result,_,weight)
+                    addResult(result,label,rate*weight/1024,true,rate,survival,weight,1024)
+                    return false
+                end,nil,opts)
+                if finisher=="HardWax"then
+                    Engine.Batch(route.File,{"SoftWax"},function(result,_,weight)
+                        addResult(result,label,.4*weight/32,nil,rate,survival,weight,1024)
+                        return false
+                    end,nil,opts)
+                end
+            end
+            work+=1;if options.OnProgress then options.OnProgress(work,totalWork)end
+        end
+        local list={}
+        for _,trait in pairs(traits)do
+            trait.Levels={}
+            for _,level in pairs(trait.Values)do
+                level.Ways={};for _,way in pairs(level.Options)do level.Ways[#level.Ways+1]=way end
+                table.sort(level.Ways,function(a,b)
+                    if math.abs(a.Probability-b.Probability)>1e-12 then return a.Probability>b.Probability end
+                    if a.Survival~=b.Survival then return a.Survival>b.Survival end
+                    return a.Wax<b.Wax
+                end)
+                trait.Levels[#trait.Levels+1]=level
+            end
+            table.sort(trait.Levels,function(a,b)return a.Value>b.Value end)
+            list[#list+1]=trait
+        end
+        table.sort(list,function(a,b)if a.Kind~=b.Kind then return a.Kind<b.Kind end;return a.Name<b.Name end)
+        rows[#rows+1]={Kind=route.Kind,Offset=route.Offset,Steps=route.Steps,Turps=route.Turps,Soft=route.Soft,Traits=list,Full=#(route.File.W or {})==5}
+        if options.OnStage then options.OnStage("All bonuses · offset "..route.Offset.." · "..#rows.."/"..#routes)end
+        task.wait()
+    end
+    return {Rows=rows,MaxResets=maxResets,CurrentOffset=initial.RC or 0,Counter=counter,Count=#rows}
+end
+
 -- Exact batch search. Equivalent RNG/count/value states are merged with integer
 -- multiplicities; no samples or guessed probabilities are used.
 function Engine.Batch(data, chain, predicate, groupBy, options)
@@ -750,7 +867,7 @@ function Engine.AutoPlan(data,targets,matchesTarget,groupBy,options)
         local finishers=causticRequired and {"CausticWax"} or {"SoftWax","HardWax","CausticWax"}
         for soft=0,slots-1 do
             for _,wax in ipairs(finishers)do
-                for n=1,slots-soft do
+                for n=1,(wax=="CausticWax" and 1 or slots-soft) do
                     local chain={}
                     for _=1,soft do chain[#chain+1]="SoftWax"end
                     for _=1,n do chain[#chain+1]=wax end
@@ -892,7 +1009,7 @@ function Engine.AutoPlan(data,targets,matchesTarget,groupBy,options)
     local medium=risky[1]
     local high
     if medium then for _,row in ipairs(risky)do
-        if row~=medium and row.SurvivalChance<medium.SurvivalChance-1e-12 and row.ExpectedExtra-row.ExpectedLoss>medium.ExpectedExtra-medium.ExpectedLoss+1e-9 then
+        if row~=medium and row.SurvivalChance<=medium.SurvivalChance+1e-12 and row.ExpectedExtra-row.ExpectedLoss>medium.ExpectedExtra-medium.ExpectedLoss+1e-9 then
             if not high or row.ExpectedExtra-row.ExpectedLoss>high.ExpectedExtra-high.ExpectedLoss+1e-9
                 or math.abs((row.ExpectedExtra-row.ExpectedLoss)-(high.ExpectedExtra-high.ExpectedLoss))<1e-9 and row.TargetChance>high.TargetChance then high=row end
         end
@@ -1097,7 +1214,7 @@ resetFirst.Font=Enum.Font.Gotham;resetFirst.TextSize=10
 local baseCaption=label(advancedPanel,"BaseOffsetCaption","Base RNG offset",10,70,130,23,10,C.muted)
 local baseOffsetInput=input(advancedPanel,"BaseOffset","0",151,70,74,23)
 seed.Parent=advancedPanel;seed.Position=UDim2.fromOffset(10,103);seed.Size=UDim2.fromOffset(215,24)
-tabs.GUIDE=button(advancedPanel,"GUIDE","HIVE BONUSES AT OFFSETS",10,138,215,25,C.blue)
+tabs.GUIDE=button(advancedPanel,"GUIDE","ALL BONUSES BY OFFSET",10,138,215,25,C.blue)
 tabs.PLAN=button(advancedPanel,"PLAN","FIND BEST WAX PLAN",10,168,215,25,C.active)
 local optionHint=label(advancedPanel,"Hint","Changes affect the simulation only.",10,198,215,28,9,C.muted)
 optionHint.TextWrapped=true
@@ -1310,8 +1427,8 @@ local function redraw()
     local explore=state.tab=="EXPLORE";local batch=state.tab=="BATCH";local guide=state.tab=="GUIDE";local planner=state.tab=="PLAN"
     chainLabel.Visible=batch or state.tab=="SINGLE";add.Visible=batch or state.tab=="SINGLE";remove.Visible=add.Visible;clear.Visible=add.Visible;copy.Visible=not explore
     viewStats.Visible=false
-    stepsLabel.Visible=guide or planner;steps.Visible=guide or planner;offsetLabel.Visible=guide or planner;offset.Visible=guide or planner
-    stepsLabel.Text=planner and "RESETS" or "COUNT";offsetLabel.Text=planner and "SECONDS" or "FROM RC"
+    stepsLabel.Visible=guide or planner;steps.Visible=guide or planner;offsetLabel.Visible=planner;offset.Visible=planner
+    stepsLabel.Text="RESETS";offsetLabel.Text="SECONDS"
     zoom.Visible=false;seed.Visible=true;copyExplore.Visible=explore
     seed.Parent=advancedPanel
     seed.Position=UDim2.fromOffset(10,103)
@@ -1336,7 +1453,7 @@ local function redraw()
     end
     planningSummary.Text="RC "..((selected() and selected().Data.RC) or 0).." · "..(state.resetFirst and "Reset " or "Keep ")..(5-remaining).."/5 → "..(5-remaining+added).."/5"
     planningSummary.TextColor3=state.resetFirst and C.green or C.muted
-    wax.Visible=not planner;waxCaption.Visible=not planner
+    wax.Visible=not planner and not guide;waxCaption.Visible=not planner and not guide
     turpPreview.Visible=not planner
     skipTrack.Visible=not guide and not planner;skipPrev.Visible=skipTrack.Visible;skip.Visible=skipTrack.Visible;skipNext.Visible=skipTrack.Visible
     window.WaxQuantityCaption.Visible=not guide and not planner
@@ -1492,7 +1609,7 @@ connect(skipPrev.Activated,function()if editable() then skip.Text=tostring(((ton
 connect(skipNext.Activated,function()if editable() then skip.Text=tostring((tonumber(skip.Text) or 1)%math.max(1,remainingSlots())+1);redraw();if showPlan then showPlan()end end end)
 connect(baseButton.Activated,function()if editable() then state.showBase=not state.showBase;if state.showBase then state.resetFirst=false end;refreshCurrent();redraw() end end)
 connect(seed.Activated,function()if editable() then state.currentSeed=not state.currentSeed;refreshCurrent();redraw() end end)
-for name,b in pairs(tabs) do connect(b.Activated,function()if editable() then state.tab=name;if name=="PLAN" then steps.Text="1";offset.Text="8" end;if name=="SINGLE" then state.chain={} end;if name=="GUIDE" then local item=selected();offset.Text=tostring(item and (item.Data.UC or item.Data.RC) or 0);steps.Text="16" elseif name=="EXPLORE" then steps.Text="32";offset.Text="0" end;state.advanced=false;popup.Visible=false;selector.Visible=false;redraw() end end) end
+for name,b in pairs(tabs) do connect(b.Activated,function()if editable() then state.tab=name;if name=="PLAN" then steps.Text="1";offset.Text="8" end;if name=="SINGLE" then state.chain={} end;if name=="GUIDE" then steps.Text="3" elseif name=="EXPLORE" then steps.Text="32";offset.Text="0" end;state.advanced=false;popup.Visible=false;selector.Visible=false;redraw() end end) end
 local function risk(chain)
     local success,survival=1,1
     for _,name in ipairs(chain) do
@@ -1808,7 +1925,7 @@ connect(start.Activated,function()
                 local rec=report.Recommendations
                 card("1. SAFEST TARGET ROUTE",rec.Safest,"No target hit in completed plans. Try a longer scan; this does not prove impossibility.")
                 card("2. MORE RISK / MORE BONUSES",rec.Balanced,"No completed route is both more destructive and better in additional trait gains than the safe route.")
-                card("3. HIGHER RISK / HIGHER REWARD",rec.HighReward,"No further strictly higher-risk, higher-trait-reward route found in this scan.")
+                card("3. EXTRA-BONUS ALTERNATIVE",rec.HighReward,"No second riskier-than-safe route with greater extra-trait reward found in this scan.")
                 if report.Rows[1] and report.Rows[1].TargetChance>0 then
                     lines[#lines+1]="HIGHEST TARGET CHANCE: "..pct(report.Rows[1].TargetChance).." · "..table.concat(report.Rows[1].Steps," → ")
                     lines[#lines+1]=""
@@ -1828,41 +1945,45 @@ connect(start.Activated,function()
                 end
                 if report.GroupedOverflow then lines[#lines+1]="Large outcome lists group overflow combinations under Other; their full probability is retained."end
                 lines[#lines+1]="Search family: 0–"..report.MaxResets.." Soft/Turpentine resets; Soft setup followed by up to "..report.MaxFutureWaxes.." Soft, Hard or Caustic waxes within remaining slots. Hard failures included."
-                lines[#lines+1]="Extra reward counts distinct additional improved traits minus reduced traits, not a money/value score. Only genuine higher-risk/higher-score alternatives are shown."
+                lines[#lines+1]="Offset setup uses Soft only. Finishers fit remaining slots; no consecutive Caustic chains are searched. Caustic alternatives may share the same 75% destruction risk."
                 lines[#lines+1]="1/32 means one next-wax skip hits. Soft → Caustic uses 1,024 skip paths until the Soft result is observed; recheck after each real wax. No guaranteed skips."
                 lines[#lines+1]="Reset routes use the recovered UC/RC model. Re-check the actual item after every wax/reset. No real items used."
                 setResults(table.concat(lines,"\n"))
             elseif state.tab=="GUIDE" then
-                local first=number(offset.Text,0,100000,"From RC")
-                local count=number(steps.Text,1,64,"Offset count")
-                local report=E.HiveOffsetOutcomes(item.Data,state.wax,first,count,opts)
-                local lines={"OFFSETS + POSSIBLE HIVE BONUSES",item.Data.T.." · "..state.wax,
-                    "Current RC: "..report.CurrentOffset,
-                    "Each row predicts ONE additional successful wax.",
-                    "Reset scenarios remove existing waxes and use the original seed.",""}
-                for _,row in ipairs(report.Rows) do
-                    lines[#lines+1]=(row.Kind=="Current" and "CURRENT ITEM · RC " or "RESET OFFSET ")..row.Offset
-                    local groups={}
-                    for _,branch in ipairs(row.Outcomes.Rows) do
-                        local bonuses={}
-                        for _,v in ipairs(branch.Result.Hive) do bonuses[#bonuses+1]=hiveDescription(v) end
-                        table.sort(bonuses)
-                        local text=#bonuses>0 and table.concat(bonuses,"\n") or "No hive bonuses"
-                        local g=groups[text]
-                        if not g then g={Text=text,Skips={},MinSkip=branch.Skip};groups[text]=g end
-                        g.Skips[#g.Skips+1]=branch.Skip
-                    end
-                    local sorted={};for _,g in pairs(groups)do sorted[#sorted+1]=g end
-                    table.sort(sorted,function(a,b)return a.MinSkip<b.MinSkip end)
-                    for _,g in ipairs(sorted) do
-                        local skips={};for _,n in ipairs(g.Skips)do skips[#skips+1]=tostring(n)end
-                        lines[#lines+1]=g.Text
-                        lines[#lines+1]="Wax skips: "..table.concat(skips,", ")
-                        lines[#lines+1]=string.format("Chance: %.3f%% if successful · %.3f%% including wax success",#g.Skips/32*100,#g.Skips/32*row.Outcomes.WaxSuccessRate*100)
+                local maxResets=number(steps.Text,0,10,"Resets")
+                local report=E.AllOffsetBonuses(item.Data,maxResets,opts)
+                local function pct(n)return string.format("%.3f%%",n*100)end
+                local lines={"ALL BONUSES BY EVERY REACHABLE OFFSET",item.Data.T,
+                    "Current item + every Soft-setup RC reachable within "..maxResets.." resets.",
+                    "Finishers: Soft, Hard, one Caustic, Soft → Hard, or Soft → Caustic (if slots allow).",
+                    "Best values for different bonuses may come from different outcomes; they are not one guaranteed combination.",""}
+                for _,row in ipairs(report.Rows)do
+                    lines[#lines+1]="OFFSET "..row.Offset.." · "..row.Kind
+                    if #row.Steps>0 then lines[#lines+1]=table.concat(row.Steps," → ")end
+                    if row.Full then lines[#lines+1]="5/5: current bonuses shown; reset before adding wax."end
+                    if #row.Traits==0 then lines[#lines+1]="No hive bonuses or abilities in these one-wax outcomes."end
+                    for _,trait in ipairs(row.Traits)do
+                        local best=trait.Levels[1]
+                        lines[#lines+1]=trait.Kind=="Ability" and ("ABILITY: "..trait.Name) or ("BEST: "..hiveDescription(best.Sample))
+                        for _,way in ipairs(best.Ways)do
+                            if way.Wax=="Already present"then lines[#lines+1]="Already present · no wax needed"
+                            else
+                                lines[#lines+1]=way.Wax.." · "..way.Hits.."/"..way.Total.." successful-skip paths · chance "..pct(way.Probability).." · destruction "..pct(1-way.Survival)
+                                if way.FailurePreserves then lines[#lines+1]="Includes Hard failure preserving the existing/Soft-setup bonus."end
+                            end
+                        end
+                        if #trait.Levels>1 then
+                            lines[#lines+1]="OTHER ATTAINABLE VALUES:"
+                            for i=2,#trait.Levels do
+                                local level=trait.Levels[i];local way=level.Ways[1]
+                                lines[#lines+1]=hiveDescription(level.Sample).." · "..way.Wax.." · "..pct(way.Probability)
+                            end
+                        end
                         lines[#lines+1]=""
                     end
+                    lines[#lines+1]="-------------------------"
                 end
-                lines[#lines+1]="RC scenarios are not resource instructions. Reaching an RC needs a valid Soft/Turpentine route. Wax skip is random."
+                lines[#lines+1]="All offsets in this bounded Soft/Turpentine reachability range are included. More resets can reach further offsets. Reset-counter model must be rechecked against the actual item."
                 setResults(table.concat(lines,"\n"))
             else
                 local from=0

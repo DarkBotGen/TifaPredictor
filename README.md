@@ -1,5 +1,7 @@
 # Predictor
 
+New **··· → ALL BONUSES BY OFFSET** shows every Soft/reset-reachable RC within your reset limit, with the best individual hive bonuses/abilities, finishing choices, exact path counts and risk. The automatic planner now uses Soft-only offset setup and a single Caustic at most—no repeated Caustic searches. [Scope and validation](All-offset-bonuses.md).
+
 Quick risk/reward checks now default to eight seconds: choose a hive bonus, then FIND BEST WAX PLAN. See the safest target route and up to two genuinely riskier routes with more additional trait gains, including actual bonus examples, target chances, destruction risk and successful-roll counts. Results widen and your target stays selected across compatible Beequips. Repeat unchanged checks reuse the result. Use 30+ seconds for five-wax plans. Alternatives and coverage are never invented when the bounded search does not support them.
 
 Automatic planning: select an ability/hive/stat target, then **··· → FIND BEST WAX PLAN**. It compares setup waxes, reachable reset offsets and up to five finishing waxes, showing target chances, destruction risk, costs and hive/stat outcomes at each offset. **Best found** is bounded by your reset/time budget and completed candidate coverage. See [planner rules and verified example](Automatic-wax-planner.md).

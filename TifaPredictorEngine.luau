@@ -266,6 +266,123 @@ function Engine.HiveOffsetOutcomes(data,waxName,firstOffset,count,options)
     return {Rows=rows,CurrentOffset=file.RC or 0,CumulativeAttempts=file.UC,FirstOffset=firstOffset,Count=count}
 end
 
+-- Every RC reachable using only Soft setup and at most maxResets resets.
+-- This is a bounded reachable-offset view, not a claim that offsets end forever.
+function Engine.AllOffsetBonuses(data,maxResets,options)
+    options=table.clone(options or {})
+    assert(maxResets%1==0 and maxResets>=0 and maxResets<=10,"Choose 0..10 resets")
+    options.ResetWaxes=false;options.ShowBase=false;options.UseOriginalSeed=false;options.BaseOffset=0
+    local initial=detached(data,options)
+    local counter=initial.UC
+    if counter==nil then
+        assert((initial.RC or 0)==0,"Missing UC: refresh the item before finding reachable offsets")
+        counter=0;for _,w in ipairs(initial.W or {})do if w[1]~=4 then counter+=1 end end
+    end
+    local routes={{File=initial,Kind="Current",Offset=initial.RC or 0,Steps={},Turps=0,Soft=0}}
+    local remaining=5-#(initial.W or {})
+    if maxResets>0 then
+        local first=counter+(#(initial.W or {})>0 and 0 or 1)
+        local last=counter+remaining+5*(maxResets-1)
+        assert(last<=100000,"Reachable offset exceeds supported range")
+        for rc=first,last do
+            local left=rc-counter
+            local steps,turps,soft={},0,left
+            local fill=math.min(remaining,left)
+            if fill>0 then steps[#steps+1]="SoftWax ×"..fill end
+            turps+=1;left-=fill
+            steps[#steps+1]="Turpentine → RC "..(counter+fill)
+            local reached=counter+fill
+            while left>0 do
+                local n=math.min(5,left)
+                steps[#steps+1]="SoftWax ×"..n;reached+=n;left-=n;turps+=1
+                steps[#steps+1]="Turpentine → RC "..reached
+            end
+            assert(turps<=maxResets,"Reset reachability mismatch")
+            local file=clone(initial);file.W=nil;file.S=file.OS or file.S;file.RC=rc;file.UC=rc
+            routes[#routes+1]={File=file,Kind="After reset",Offset=rc,Steps=steps,Turps=turps,Soft=soft}
+        end
+    end
+    local rows={}
+    local totalWork=#routes*5
+    local work=0
+    for _,route in ipairs(routes)do
+        if options.Cancelled and options.Cancelled()then error("Prediction cancelled",0)end
+        local traits={}
+        local function addResult(result,wax,mass,skip,rate,survival,weight,total)
+            local function add(key,kind,sample,value)
+                if value==0 then return end
+                local trait=traits[key]
+                if not trait then trait={Kind=kind,Name=kind=="Ability" and sample or sample.Type,Values={},BestValue=value};traits[key]=trait end
+                trait.BestValue=math.max(trait.BestValue,value)
+                local level=trait.Values[value]
+                if not level then level={Value=value,Sample=sample,Options={}};trait.Values[value]=level end
+                local way=level.Options[wax]
+                if not way then way={Wax=wax,Probability=0,SuccessRate=rate,Survival=survival,Hits=0,Total=total or 32,Skips={},FailurePreserves=false};level.Options[wax]=way end
+                way.Probability+=mass
+                if skip then way.Hits+=weight or 1;if type(skip)=="number"then way.Skips[#way.Skips+1]=skip end
+                elseif wax~="Already present"then way.FailurePreserves=true end
+            end
+            for _,v in ipairs(result.Hive)do add(tag({HiveBonusStat=v.Type,Op=v.Op,Params=v.Params}),"Hive",v,v.Value)end
+            for _,v in ipairs(result.Abilities)do add("A:"..v[1],"Ability",v[1],1)end
+        end
+        local before=snapshot(route.File)
+        addResult(before,"Already present",1,nil,1,1)
+        for _,wax in ipairs({"SoftWax","HardWax","CausticWax"})do
+            if #(route.File.W or {})<5 then
+                local opts=table.clone(options);opts.OnProgress=nil
+                local outcomes=Engine.OffsetOutcomes(route.File,wax,nil,opts)
+                local rate=outcomes.WaxSuccessRate
+                local survival=outcomes.DestroyOnFailure and rate or 1
+                for _,branch in ipairs(outcomes.Rows)do addResult(branch.Result,wax,rate/32,branch.Skip,rate,survival)end
+                if rate<1 and not outcomes.DestroyOnFailure then addResult(before,wax,1-rate,nil,rate,survival)end
+            end
+            work+=1
+            if options.OnProgress then options.OnProgress(work,totalWork)end
+        end
+        -- Cheap two-step finishers cover another Soft before Hard/Caustic.
+        -- A failed Hard keeps the first Soft result, including its late ability rolls.
+        for _,finisher in ipairs({"HardWax","CausticWax"})do
+            if #(route.File.W or {})<=3 then
+                local rate=finisher=="HardWax" and .6 or .25
+                local survival=finisher=="HardWax" and 1 or .25
+                local label="SoftWax → "..finisher
+                local opts=table.clone(options);opts.Targets=nil;opts.OnProgress=nil;opts.OnStage=nil
+                Engine.Batch(route.File,{"SoftWax",finisher},function(result,_,weight)
+                    addResult(result,label,rate*weight/1024,true,rate,survival,weight,1024)
+                    return false
+                end,nil,opts)
+                if finisher=="HardWax"then
+                    Engine.Batch(route.File,{"SoftWax"},function(result,_,weight)
+                        addResult(result,label,.4*weight/32,nil,rate,survival,weight,1024)
+                        return false
+                    end,nil,opts)
+                end
+            end
+            work+=1;if options.OnProgress then options.OnProgress(work,totalWork)end
+        end
+        local list={}
+        for _,trait in pairs(traits)do
+            trait.Levels={}
+            for _,level in pairs(trait.Values)do
+                level.Ways={};for _,way in pairs(level.Options)do level.Ways[#level.Ways+1]=way end
+                table.sort(level.Ways,function(a,b)
+                    if math.abs(a.Probability-b.Probability)>1e-12 then return a.Probability>b.Probability end
+                    if a.Survival~=b.Survival then return a.Survival>b.Survival end
+                    return a.Wax<b.Wax
+                end)
+                trait.Levels[#trait.Levels+1]=level
+            end
+            table.sort(trait.Levels,function(a,b)return a.Value>b.Value end)
+            list[#list+1]=trait
+        end
+        table.sort(list,function(a,b)if a.Kind~=b.Kind then return a.Kind<b.Kind end;return a.Name<b.Name end)
+        rows[#rows+1]={Kind=route.Kind,Offset=route.Offset,Steps=route.Steps,Turps=route.Turps,Soft=route.Soft,Traits=list,Full=#(route.File.W or {})==5}
+        if options.OnStage then options.OnStage("All bonuses · offset "..route.Offset.." · "..#rows.."/"..#routes)end
+        task.wait()
+    end
+    return {Rows=rows,MaxResets=maxResets,CurrentOffset=initial.RC or 0,Counter=counter,Count=#rows}
+end
+
 -- Exact batch search. Equivalent RNG/count/value states are merged with integer
 -- multiplicities; no samples or guessed probabilities are used.
 function Engine.Batch(data, chain, predicate, groupBy, options)
@@ -748,7 +865,7 @@ function Engine.AutoPlan(data,targets,matchesTarget,groupBy,options)
         local finishers=causticRequired and {"CausticWax"} or {"SoftWax","HardWax","CausticWax"}
         for soft=0,slots-1 do
             for _,wax in ipairs(finishers)do
-                for n=1,slots-soft do
+                for n=1,(wax=="CausticWax" and 1 or slots-soft) do
                     local chain={}
                     for _=1,soft do chain[#chain+1]="SoftWax"end
                     for _=1,n do chain[#chain+1]=wax end
@@ -890,7 +1007,7 @@ function Engine.AutoPlan(data,targets,matchesTarget,groupBy,options)
     local medium=risky[1]
     local high
     if medium then for _,row in ipairs(risky)do
-        if row~=medium and row.SurvivalChance<medium.SurvivalChance-1e-12 and row.ExpectedExtra-row.ExpectedLoss>medium.ExpectedExtra-medium.ExpectedLoss+1e-9 then
+        if row~=medium and row.SurvivalChance<=medium.SurvivalChance+1e-12 and row.ExpectedExtra-row.ExpectedLoss>medium.ExpectedExtra-medium.ExpectedLoss+1e-9 then
             if not high or row.ExpectedExtra-row.ExpectedLoss>high.ExpectedExtra-high.ExpectedLoss+1e-9
                 or math.abs((row.ExpectedExtra-row.ExpectedLoss)-(high.ExpectedExtra-high.ExpectedLoss))<1e-9 and row.TargetChance>high.TargetChance then high=row end
         end

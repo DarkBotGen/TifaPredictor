@@ -1,10 +1,12 @@
 # Automatic target planner
 
+Current setup/finisher policy: offset setup uses only Soft Wax and Turpentine. Automatic finishing chains contain at most ONE Caustic; repeated Caustic candidates are removed. Hard and Soft finishers must fit the remaining slots. Riskier Caustic alternatives may share the same 75% destruction risk and are distinguished by additional-trait reward. Historical multi-Caustic comparisons below explain the change but are no longer searched. See All-offset-bonuses.md for the target-free reachable-offset overview.
+
 Select a Beequip and the target filters (Token Link, another ability, a hive bonus or bee stat). Open the top-right menu and choose FIND BEST WAX PLAN. RESETS controls the maximum modeled Turpentine cycles (0..3); SECONDS controls the search budget (default 8). Press FIND BEST. Quick checks examine up to three waxes; 30+ seconds enables five-wax finishing plans. No waxes or items are actually used.
 
 ## Three risk/reward choices
 
-The report shows SAFEST TARGET ROUTE, MORE RISK / MORE BONUSES, and HIGHER RISK / HIGHER REWARD. Safest prioritizes survival, then target chance. Riskier alternatives must have strictly lower survival and a greater expected net count of additional improved traits, conditional on obtaining the target and retaining the item. The third must be riskier and higher in this score than the second. Missing alternatives are explicitly reported rather than fabricated. Highest unconditional target chance is also shown separately, since it need not be the safest route.
+The report shows SAFEST TARGET ROUTE, MORE RISK / MORE BONUSES, and EXTRA-BONUS ALTERNATIVE. Safest prioritizes survival, then target chance. The second must have lower survival and a greater expected net count of additional improved traits, conditional on obtaining the target and retaining the item. The third must have at least as much destruction risk as the second and a strictly greater extra-trait score; two single-Caustic alternatives can share the same risk. Missing alternatives are explicitly reported rather than fabricated. Highest unconditional target chance is shown separately.
 
 Additional reward counts distinct improved traits minus reduced traits; it is not a monetary score or a comparison of raw numerical magnitudes across different stats. Actual bonus values, new abilities, reductions, example combinations, combination probabilities, expected trait gains/losses and chance of any extra improvement are displayed. All relevant stat values are retained during this calculation; selected-target-only projection is disabled to avoid false extra-bonus probabilities.
 

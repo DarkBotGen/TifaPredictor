@@ -1,5 +1,7 @@
 # Predictor GUI
 
+Target-free overview: ··· → ALL BONUSES BY OFFSET. RESETS selects 0..10 Soft/Turpentine cycles (default 3). It checks every RC reachable within that limit and shows best individual hive-bonus values and abilities, exact hit counts, chances and finisher risk. It compares Soft, Hard, one Caustic, Soft/Hard and Soft/Caustic when slots allow. See All-offset-bonuses.md. Automatic planning now uses Soft-only reset setup and at most one Caustic per finishing chain.
+
 ## Automatic target planning
 
 Select desired ability/hive/stat filters, then ··· → FIND BEST WAX PLAN. The default eight-second check examines up to three finishing waxes; 30+ seconds enables five. Results show a safest route and up to two strictly riskier, higher-extra-trait-reward alternatives, plus highest target chance, actual additional bonuses, costs, offsets and branch counts. Hard failures and reduced traits are included. Targets stay selected across compatible items, results widen, and unchanged checks reuse their result. Incomplete coverage or missing alternatives is explicit. See Automatic-wax-planner.md for ranking definitions, item-specific tests and limits.
