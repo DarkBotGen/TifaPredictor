@@ -42,7 +42,7 @@ EXPLORE searches the 32 legal RNG skips for one next successful application of t
 
 No real waxes, Turpentine, inventory remotes or authentication changes were used. Game-server wax outcomes and parity against Greg’s full predictor have not been validated.
 
-Complex four/five-step chains can exceed the default 200,000-state or 120-second limit. Such runs stop explicitly instead of silently sampling or returning partial probabilities.
+Complex searches switch from merged frontiers to exact streaming at 50,000 states. The per-search time limit is 600 seconds. No partial probabilities are reported on cancellation or timeout.
 
 ## Beequip image cards
 
@@ -54,7 +54,7 @@ The GitHub main loader is updated with each completed change, as requested. Its 
 
 The Method section is removed. The screen uses compact headings and rounded percentages; COPY REPORT retains exact counts and six-decimal percentages. Reset, seed selection and base RNG offset are behind OPTIONS. Existing offset definitions and limitations are unchanged.
 
-GUIDE: select desired ability/stat filters, choose the finishing wax, and press COMPARE. ALL selected targets must improve. It compares the finisher alone, Soft → finisher, Hard → finisher, Soft → Soft → finisher, Soft → Hard → finisher and Hard → Soft → finisher, subject to remaining slots. These are six short candidate chains, not a global optimum over all possible plans.
+GUIDE: select desired ability/stat filters, choose the finishing wax, and press COMPARE. ALL selected targets must improve. It compares the finisher alone, Soft → finisher, Hard → finisher, Soft → Soft → finisher, Soft → Hard → finisher and Hard → Soft → finisher, subject to remaining slots. These six finishing chains are now evaluated both directly and after reachable Soft/Turpentine setup routes (up to three resets). This bounded search is not a global optimum over all possible plans.
 
 Chains are ranked by target-and-survival probability. Non-destructive Hard failures are included; destructive failures count as misses. The copied guide includes conditional target chance given survival as well as overall chance. Soft is not assumed to improve the result: it advances the seeded RNG and changes upgrades/pools, and the effect is calculated for the selected item.
 
@@ -67,3 +67,11 @@ Permanents is removed. Selecting a different Beequip in the native Case, Storage
 Streaming fallback was compared against merged searches for 1,024 branches on Bottle Cap, Whistle, Paperclip and Kazoo. Another 96 next-wax offset results matched direct history evaluation; cancellation was checked in Madium.
 
 Additional waxes: select a partially waxed Beequip, leave Reset before search off, choose SINGLE and ADD WAXES 1 to predict its next application. The header shows existing-to-planned wax count (for example 2/5 to 3/5). BATCH can add a mixed chain within the remaining slots. Improvements are measured against current stats. Verified a two-wax fixture plus third Caustic application against all 32 direct evaluations, without modifying input data.
+
+## Reachable reset plans
+
+GUIDE starts from the current S/history and a zero artificial base offset. Reset-before-search, Show Base and original-seed display options do not create a free setup reset. Every planned reset is counted and restores OS when available. It searches 0–5 Soft fillers per reset, constrained by remaining slots, and up to three Turpentines. It retains the lowest-resource route to each reached reset offset. Routes show ordered steps, filler Soft cost, Turpentine cost, finishing waxes, reset offset, survival and target chance. Ranking: target chance descending, then fewer Turpentines, then fewer waxes. All target improvements compare against the original current stats, including any upgrades a reset removes.
+
+UC counts upgrade-wax attempts, not successful stat points or the random skip. Observed live inventory includes UC=5 with five failed Hard Waxes, UC=4 with four Hard Waxes plus one Swirled, and UC=5 with five Soft Waxes. Client BeequipFile.RegisterTurpentineUpgradeCount assigns RC=UC. The manager that invokes these methods is server-side and has not been recovered; the combined route transition is a model supported by the client methods and observed counters, not a resource-consuming server test. The seed-reset behavior is also documented at https://bee-swarm-simulator.fandom.com/wiki/Beequip/Generation. Refresh/re-evaluate the selected item after each actual reset before following later steps. If UC is absent with a nonzero RC, the planner rejects the unknown cumulative count.
+
+Validation: the full default search produced 96 plans for an unwaxed Bottle Cap, including Soft ×5 / Turpentine repeated three times reaching RC=15. A two-wax starting fixture correctly used three fillers before its first reset to RC=5. A 5/5 fixture produced valid immediate-reset plans. A Whistle target rate after reset matched all 32 direct next-wax branches. Inputs were unchanged. No waxes, Turpentine or inventory/trade remotes were used.

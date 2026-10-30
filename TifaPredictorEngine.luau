@@ -351,7 +351,7 @@ end
 
 -- Compare short setup chains for a target. Non-destructive Hard failures are
 -- included; destructive failures contribute zero target probability.
-function Engine.Guide(data, finishingWax, matchesTarget, options)
+local function shortGuide(data, finishingWax, matchesTarget, options)
     options=options or {}
     assert(type(matchesTarget)=="function","Choose at least one target")
     waxDefinition(finishingWax)
@@ -420,6 +420,86 @@ function Engine.Guide(data, finishingWax, matchesTarget, options)
     end)
     return {Rows=rows,Baseline=baseline,RemainingSlots=remaining,FinishingWax=finishingWax,
         AllSelectedTargets=true,IncludesNonDestructiveFailures=true}
+end
+
+-- Reachable reset routes: upgrade-wax attempts increment UC once, even Hard failures.
+-- Soft filler rolls are erased by the reset; no 32^filler enumeration is needed.
+function Engine.Guide(data, finishingWax, matchesTarget, options)
+    options=options or {}
+    local startOptions=table.clone(options)
+    startOptions.ResetWaxes=false;startOptions.ShowBase=false;startOptions.UseOriginalSeed=false
+    startOptions.BaseOffset=0
+    local original=detached(data,startOptions)
+    local baseline=snapshot(original)
+    local maxResets=options.MaxResets or 3
+    assert(maxResets%1==0 and maxResets>=0 and maxResets<=10,"MaxResets must be 0..10")
+    local rows,routes={},{}
+    local function cancelled()
+        if options.Cancelled and options.Cancelled() then error("Guide cancelled",0) end
+    end
+    local function evaluate(file,route)
+        cancelled()
+        if #(file.W or {})>=5 then return end
+        local opts=table.clone(options)
+        opts.ResetWaxes=false;opts.ShowBase=false;opts.UseOriginalSeed=false;opts.BaseOffset=0
+        local report=shortGuide(file,finishingWax,function(result)return matchesTarget(result,baseline)end,opts)
+        for _,row in ipairs(report.Rows) do
+            row.Steps=clone(route.Steps)
+            row.Steps[#row.Steps+1]=table.concat(row.Chain," > ")
+            row.TurpentineCount=route.Turps;row.FillerSoftCount=route.Soft
+            row.ResetOffset=file.RC or 0;row.TotalWaxCount=route.Soft+#row.Chain
+            rows[#rows+1]=row
+        end
+    end
+    evaluate(original,{Steps={},Turps=0,Soft=0})
+    local frontier={{File=original,Steps={},Turps=0,Soft=0}}
+    for depth=1,maxResets do
+        local nextRoutes={}
+        for _,route in ipairs(frontier) do
+            local file=route.File
+            local remaining=5-#(file.W or {})
+            for soft=0,remaining do
+                cancelled()
+                -- An empty reset cannot advance the counter or produce a new route.
+                if soft>0 or #(file.W or {})>0 then
+                    local counter=file.UC
+                    if counter==nil then
+                        -- Safe reconstruction for an untouched history only.
+                        assert((file.RC or 0)==0,"Missing cumulative wax counter; refresh/import UC for reset planning")
+                        counter=0
+                        for _,w in ipairs(file.W or {}) do if w[1]~=4 then counter+=1 end end
+                    end
+                    local reset=clone(file)
+                    reset.UC=counter+soft;reset.RC=reset.UC;reset.W=nil
+                    reset.S=reset.OS or reset.S
+                    local steps=clone(route.Steps)
+                    if soft>0 then steps[#steps+1]="SoftWax ×"..soft end
+                    steps[#steps+1]="Turpentine → reset offset "..reset.RC
+                    local candidate={File=reset,Steps=steps,Turps=depth,Soft=route.Soft+soft}
+                    local prior=nextRoutes[reset.RC]
+                    if not prior or candidate.Soft<prior.Soft then nextRoutes[reset.RC]=candidate end
+                end
+            end
+        end
+        frontier={}
+        for _,route in pairs(nextRoutes) do
+            frontier[#frontier+1]=route
+            local key=tostring(route.File.RC)
+            if not routes[key] then
+                routes[key]=true
+                if options.OnStage then options.OnStage("Planning reset "..depth.."/"..maxResets.." · offset "..key) end
+                evaluate(route.File,route)
+            end
+        end
+    end
+    table.sort(rows,function(a,b)
+        if math.abs(a.TargetChance-b.TargetChance)>1e-12 then return a.TargetChance>b.TargetChance end
+        if a.TurpentineCount~=b.TurpentineCount then return a.TurpentineCount<b.TurpentineCount end
+        if a.TotalWaxCount~=b.TotalWaxCount then return a.TotalWaxCount<b.TotalWaxCount end
+        return table.concat(a.Steps," > ")<table.concat(b.Steps," > ")
+    end)
+    return {Rows=rows,Baseline=baseline,RemainingSlots=5-#(original.W or {}),MaxResets=maxResets,
+        FinishingWax=finishingWax,AllSelectedTargets=true,IncludesNonDestructiveFailures=true}
 end
 
 -- Lists only the current player's locally replicated inventory, without IDs.

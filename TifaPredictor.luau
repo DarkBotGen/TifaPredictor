@@ -353,7 +353,7 @@ end
 
 -- Compare short setup chains for a target. Non-destructive Hard failures are
 -- included; destructive failures contribute zero target probability.
-function Engine.Guide(data, finishingWax, matchesTarget, options)
+local function shortGuide(data, finishingWax, matchesTarget, options)
     options=options or {}
     assert(type(matchesTarget)=="function","Choose at least one target")
     waxDefinition(finishingWax)
@@ -422,6 +422,86 @@ function Engine.Guide(data, finishingWax, matchesTarget, options)
     end)
     return {Rows=rows,Baseline=baseline,RemainingSlots=remaining,FinishingWax=finishingWax,
         AllSelectedTargets=true,IncludesNonDestructiveFailures=true}
+end
+
+-- Reachable reset routes: upgrade-wax attempts increment UC once, even Hard failures.
+-- Soft filler rolls are erased by the reset; no 32^filler enumeration is needed.
+function Engine.Guide(data, finishingWax, matchesTarget, options)
+    options=options or {}
+    local startOptions=table.clone(options)
+    startOptions.ResetWaxes=false;startOptions.ShowBase=false;startOptions.UseOriginalSeed=false
+    startOptions.BaseOffset=0
+    local original=detached(data,startOptions)
+    local baseline=snapshot(original)
+    local maxResets=options.MaxResets or 3
+    assert(maxResets%1==0 and maxResets>=0 and maxResets<=10,"MaxResets must be 0..10")
+    local rows,routes={},{}
+    local function cancelled()
+        if options.Cancelled and options.Cancelled() then error("Guide cancelled",0) end
+    end
+    local function evaluate(file,route)
+        cancelled()
+        if #(file.W or {})>=5 then return end
+        local opts=table.clone(options)
+        opts.ResetWaxes=false;opts.ShowBase=false;opts.UseOriginalSeed=false;opts.BaseOffset=0
+        local report=shortGuide(file,finishingWax,function(result)return matchesTarget(result,baseline)end,opts)
+        for _,row in ipairs(report.Rows) do
+            row.Steps=clone(route.Steps)
+            row.Steps[#row.Steps+1]=table.concat(row.Chain," > ")
+            row.TurpentineCount=route.Turps;row.FillerSoftCount=route.Soft
+            row.ResetOffset=file.RC or 0;row.TotalWaxCount=route.Soft+#row.Chain
+            rows[#rows+1]=row
+        end
+    end
+    evaluate(original,{Steps={},Turps=0,Soft=0})
+    local frontier={{File=original,Steps={},Turps=0,Soft=0}}
+    for depth=1,maxResets do
+        local nextRoutes={}
+        for _,route in ipairs(frontier) do
+            local file=route.File
+            local remaining=5-#(file.W or {})
+            for soft=0,remaining do
+                cancelled()
+                -- An empty reset cannot advance the counter or produce a new route.
+                if soft>0 or #(file.W or {})>0 then
+                    local counter=file.UC
+                    if counter==nil then
+                        -- Safe reconstruction for an untouched history only.
+                        assert((file.RC or 0)==0,"Missing cumulative wax counter; refresh/import UC for reset planning")
+                        counter=0
+                        for _,w in ipairs(file.W or {}) do if w[1]~=4 then counter+=1 end end
+                    end
+                    local reset=clone(file)
+                    reset.UC=counter+soft;reset.RC=reset.UC;reset.W=nil
+                    reset.S=reset.OS or reset.S
+                    local steps=clone(route.Steps)
+                    if soft>0 then steps[#steps+1]="SoftWax ×"..soft end
+                    steps[#steps+1]="Turpentine → reset offset "..reset.RC
+                    local candidate={File=reset,Steps=steps,Turps=depth,Soft=route.Soft+soft}
+                    local prior=nextRoutes[reset.RC]
+                    if not prior or candidate.Soft<prior.Soft then nextRoutes[reset.RC]=candidate end
+                end
+            end
+        end
+        frontier={}
+        for _,route in pairs(nextRoutes) do
+            frontier[#frontier+1]=route
+            local key=tostring(route.File.RC)
+            if not routes[key] then
+                routes[key]=true
+                if options.OnStage then options.OnStage("Planning reset "..depth.."/"..maxResets.." · offset "..key) end
+                evaluate(route.File,route)
+            end
+        end
+    end
+    table.sort(rows,function(a,b)
+        if math.abs(a.TargetChance-b.TargetChance)>1e-12 then return a.TargetChance>b.TargetChance end
+        if a.TurpentineCount~=b.TurpentineCount then return a.TurpentineCount<b.TurpentineCount end
+        if a.TotalWaxCount~=b.TotalWaxCount then return a.TotalWaxCount<b.TotalWaxCount end
+        return table.concat(a.Steps," > ")<table.concat(b.Steps," > ")
+    end)
+    return {Rows=rows,Baseline=baseline,RemainingSlots=5-#(original.W or {}),MaxResets=maxResets,
+        FinishingWax=finishingWax,AllSelectedTargets=true,IncludesNonDestructiveFailures=true}
 end
 
 -- Lists only the current player's locally replicated inventory, without IDs.
@@ -988,7 +1068,7 @@ connect(advancedButton.Activated,function()if editable() then state.advanced=not
 connect(optionsClose.Activated,function()state.advanced=false;redraw()end)
 connect(help.Activated,function()
     if not editable() then return end
-    setResults("QUICK HELP\n\nBATCH\nChoose wax/count → ADD → filters → START. Any selected improvement counts. COPY REPORT keeps exact counts and six-decimal percentages; the screen rounds them.\n\nGUIDE\nSelect target abilities/stats and a finishing wax, then COMPARE. ALL targets must improve. It compares the finishing wax alone with Soft/Hard setup chains of up to three steps. Target + survival includes wax failure risk. It does not promise Soft first is better.\n\nOPTIONS\nReset before search is a simulated Turpentine reset; your item is unchanged. Base RNG offset and known current/original seed selection are advanced controls. Offset labels are not verified Greg equivalents.\n\nBatch chances assume successful waxes; chain success is shown separately. Guide includes non-destructive failures and treats destruction as a miss. DebugWax is simulation-only.\n\nSTOP cancels. Limits stop incomplete searches without returning partial probabilities.")
+    setResults("QUICK HELP\n\nBATCH\nChoose wax/count → ADD → filters → START. Any selected improvement counts. COPY REPORT keeps exact counts and six-decimal percentages; the screen rounds them.\n\nGUIDE\nSelect target abilities/stats and a finishing wax, then COMPARE. ALL targets must improve. It searches up to three Turpentine resets with Soft filler, then finishing wax alone or Soft/Hard setup chains of up to three steps. Target + survival includes wax failure risk. It does not promise Soft first is better.\n\nOPTIONS\nReset before search is a simulated Turpentine reset; your item is unchanged. Base RNG offset and known current/original seed selection are advanced controls. Offset labels are not verified Greg equivalents.\n\nBatch chances assume successful waxes; chain success is shown separately. Guide includes non-destructive failures and treats destruction as a miss. DebugWax is simulation-only.\n\nSTOP cancels. Limits stop incomplete searches without returning partial probabilities.")
 end)
 local function number(text,min,max,labelText)
     local n=tonumber(text);assert(n and n%1==0 and n>=min and n<=max,labelText.." must be "..min.."–"..max);return n
@@ -1094,23 +1174,26 @@ connect(start.Activated,function()
                 lines[#lines+1]="Targets: "..table.concat(names," + ")
                 lines[#lines+1]="All targets must improve."
                 lines[#lines+1]="Finish with: "..state.wax
-                lines[#lines+1]="Plan: "..(state.resetFirst and "after a simulated reset" or "keep existing waxes")
+                lines[#lines+1]="Plan starts from actual current seed/history; resets are included in route costs."
                 lines[#lines+1]=""
                 if guide.Rows[1] and guide.Rows[1].TargetChance>0 then
-                    lines[#lines+1]="Best choice: "..table.concat(guide.Rows[1].Chain," > ")
+                    lines[#lines+1]="Best choice: "..table.concat(guide.Rows[1].Steps," > ")
                 else lines[#lines+1]="No target improvement found in these plans." end
                 lines[#lines+1]=""
                 for i,row in ipairs(guide.Rows) do
-                    lines[#lines+1]=i..". "..table.concat(row.Chain," > ")
+                    lines[#lines+1]=i..". "..table.concat(row.Steps," > ")
                     lines[#lines+1]="Target + survival: "..pct(row.TargetChance)
                     lines[#lines+1]="If item survives: "..pct(row.TargetGivenSurvival)
-                    lines[#lines+1]="Survival: "..pct(row.SurvivalChance).." · "..row.Slots.." slot(s)"
+                    lines[#lines+1]="Survival: "..pct(row.SurvivalChance)
+                    lines[#lines+1]="Cost: "..row.TurpentineCount.." Turpentine · "..row.FillerSoftCount.." filler Soft · "..#row.Chain.." finishing wax(es)"
+                    lines[#lines+1]="Finishing reset offset: "..row.ResetOffset
                     lines[#lines+1]=""
                 end
-                lines[#lines+1]="Compared "..#guide.Rows.." setup chains (1–3 steps), not every possible plan."
+                lines[#lines+1]="Compared "..#guide.Rows.." plans: up to "..guide.MaxResets.." resets, 0–5 filler Soft per reset, and six finishing chains of up to 3 waxes."
                 lines[#lines+1]="Soft advances the seeded RNG by a random skip plus upgrade rolls. It also changes upgrade pools."
                 lines[#lines+1]="Hard failures are included; destroyed items count as misses."
-                lines[#lines+1]="No guaranteed offset sequence. No real wax used."
+                lines[#lines+1]="All targets compare against the selected starting stats. Turpentine removes prior upgrades."
+                lines[#lines+1]="Reset routes use cumulative wax-attempt counters, not controllable wax skips. Re-check the item after each reset. No real wax used."
                 setResults(table.concat(lines,"\n"))
             else
                 -- Only the 32 legal skips for the next successful wax are searched.
