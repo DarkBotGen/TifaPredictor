@@ -74,6 +74,7 @@ local function generate(file)
     local draws = 0
     local function nextNumber() draws += 1; return rng:NextNumber() end
     local baseOffset=file.PredictorBaseOffset or 0
+    local trace={ArtificialBaseSkip=baseOffset,ResetSkip=file.RC or 0,Waxes={}}
     for _=1,baseOffset do nextNumber() end
     local def, quality = BeequipTypes.Get(file.T), file.Q
     local function resolve(value) return RQValue.Resolve(value, quality, nextNumber, def.OldRNG) end
@@ -87,8 +88,10 @@ local function generate(file)
         if value then hive[#hive + 1] = {Type = item.Type, Op = item.Op,
             Params = item.Params, Value = value} end
     end
+    trace.AfterBaseStats=draws
     for _ = 1, file.RC or 0 do nextNumber() end
     local afterTurp=draws
+    trace.AfterResetSkip=draws
     local function addAbility(name, upgraded)
         if name and not added[name] then
             added[name] = true; abilities[#abilities + 1] = {name, upgraded}
@@ -99,6 +102,7 @@ local function generate(file)
         if item.NamePool then name = RandomPools.SelectFromOrderedList(item.NamePool, nextNumber) end
         addAbility(name, false)
     end
+    trace.AfterBaseAbilities=draws
     local upgradeCount = 0
     for _, wax in ipairs(file.W or {}) do
         if wax[2] then upgradeCount += WaxTypes.TypeByID[wax[1]].Upgrades or 0 end
@@ -118,9 +122,13 @@ local function generate(file)
                 if item[1] == key then table.remove(pool, i); return end
             end
         end
-        for _, wax in ipairs(file.W or {}) do
+        trace.AfterUpgradeWeights=draws
+        for index, wax in ipairs(file.W or {}) do
+            local entry={Index=index,Wax=WaxTypes.TypeByID[wax[1]].Name,Success=wax[2],Skip=wax[2] and (wax[3] or 0) or 0,Start=draws}
+            trace.Waxes[#trace.Waxes+1]=entry
             if wax[2] then
                 for _ = 1, wax[3] or 0 do nextNumber() end
+                entry.AfterSkip=draws
                 local waxDef = WaxTypes.TypeByID[wax[1]]
                 for _ = 1, waxDef.Upgrades or 0 do
                     local pool = (waxDef.Name == "Caustic" or waxDef.Name == "Debug") and caustic or normal
@@ -134,7 +142,10 @@ local function generate(file)
                     end
                 end
             end
+            entry.AfterSkip=entry.AfterSkip or draws
+            entry.Finish=draws
         end
+        trace.AfterWaxRolls=draws
         local existing = {}
         for _, item in ipairs(bee) do existing[tag({BeeStat = item.Stat, Params = item.Params})] = item end
         for _, item in ipairs(hive) do existing[tag({HiveBonusStat = item.Type,
@@ -160,14 +171,17 @@ local function generate(file)
             end
         end
     end
-    return bee, hive, abilities, draws, afterTurp
+    trace.AfterUpgradeWeights=trace.AfterUpgradeWeights or trace.AfterBaseAbilities
+    trace.AfterWaxRolls=trace.AfterWaxRolls or trace.AfterBaseAbilities
+    trace.Final=draws
+    return bee, hive, abilities, draws, afterTurp, trace
 end
 
 local function snapshot(file)
-    local bee, hive, abilities, draws, afterTurp = generate(file)
+    local bee, hive, abilities, draws, afterTurp, trace = generate(file)
     return {Bee = bee or {}, Hive = hive or {}, Abilities = abilities or {},
         Seed = file.S, OriginalSeed = file.OS or file.S, Quality = file.Q,
-        TurpentineOffset = file.RC or 0, WaxHistory = clone(file.W or {}), RNGDraws = draws,
+        TurpentineOffset = file.RC or 0, WaxHistory = clone(file.W or {}), RNGDraws = draws,OffsetTrace=trace,
         BaseOffset=file.PredictorBaseOffset or 0,OffsetAfterTurp=afterTurp,CurrentOffset=draws}
 end
 
@@ -196,6 +210,31 @@ function Engine.Single(data, waxName, skip, options)
     result.WaxSuccessRate = wax.SuccessRate
     result.DestroyOnFailure = wax.DestroyOnFail == true
     return result
+end
+
+-- Full snapshots for every legal next-wax skip. Final draw count is not a state key:
+-- distinct upgrade histories can finish at the same absolute RNG position.
+function Engine.OffsetOutcomes(data,waxName,predicate,options)
+    options=options or {}
+    local before=Engine.Evaluate(data,options)
+    local wax=waxDefinition(waxName)
+    local rows,byFinal,matched={},{},0
+    for skip=1,32 do
+        if options.Cancelled and options.Cancelled() then error("Prediction cancelled",0) end
+        local result=Engine.Single(data,waxName,skip,options)
+        local match=not predicate or predicate(result,before)
+        if match then matched+=1 end
+        local row={Skip=skip,FinalOffset=result.CurrentOffset,Result=result,Matched=match,
+            ConditionalProbability=1/32,SuccessAndBranchProbability=(wax.SuccessRate or 1)/32}
+        rows[#rows+1]=row
+        local bucket=byFinal[row.FinalOffset] or {};byFinal[row.FinalOffset]=bucket
+        bucket[#bucket+1]=row
+        if options.OnProgress then options.OnProgress(skip,32) end
+        task.wait()
+    end
+    return {Before=before,Rows=rows,ByFinalOffset=byFinal,Matched=matched,Total=32,
+        ConditionalMatchRate=matched/32,SuccessAndMatchRate=(wax.SuccessRate or 1)*matched/32,
+        WaxSuccessRate=wax.SuccessRate or 1,DestroyOnFailure=wax.DestroyOnFail==true}
 end
 
 -- Exact batch search. Equivalent RNG/count/value states are merged with integer
@@ -448,6 +487,16 @@ function Engine.Guide(data, finishingWax, matchesTarget, options)
             row.Steps[#row.Steps+1]=table.concat(row.Chain," > ")
             row.TurpentineCount=route.Turps;row.FillerSoftCount=route.Soft
             row.ResetOffset=file.RC or 0;row.TotalWaxCount=route.Soft+#row.Chain
+            if #row.Chain==1 then
+                row.MatchingBranches={}
+                for skip=1,32 do
+                    cancelled()
+                    local result=Engine.Single(file,row.Chain[1],skip,opts)
+                    if matchesTarget(result,baseline) then
+                        row.MatchingBranches[#row.MatchingBranches+1]={Skip=skip,Result=result}
+                    end
+                end
+            end
             rows[#rows+1]=row
         end
     end

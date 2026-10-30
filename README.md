@@ -32,3 +32,5 @@ See [the GUI guide](TifaPredictor-GUI-README.md) for controls, semantics and tes
 The main loader is updated with each completed change. Use this repository’s main URL for future updates rather than an old commit-pinned URL.
 
 Latest update: native inspector auto-selection, next-wax offset matches sorted nearest first, and exact streaming fallback for large search frontiers. See TifaPredictor-GUI-README.md for offset semantics and validation limits.
+
+Offset investigation: see [Beequip-offset-findings.md](Beequip-offset-findings.md). Explore includes per-branch RNG trace positions and full results; single-finisher Guide plans include target results at reachable reset offsets.
