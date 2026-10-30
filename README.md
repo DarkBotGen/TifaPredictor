@@ -1,9 +1,30 @@
 # TifaPredictor
 
-The default entry point now contains the original supplied protected script. The reconstructed VM candidate was withdrawn after it froze a Roblox client.
+Readable Bee Swarm Simulator Beequip prediction simulator with a dark GUI and image inventory sidebar.
+
+## Run the latest version
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/DarkBotGen/TifaPredictor/main/TifaPredictor.luau"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/DarkBotGen/TifaPredictor/main/TifaPredictor.luau?t=" .. tostring(os.time())))()
 ```
 
-This is a compatibility rollback, not a completed deobfuscation or a verified freeze fix. Execution in a Roblox executor has not been tested here. If the original script also freezes in the same executor, this hosted copy may do so too.
+Run inside the supported game/executor context. The query parameter helps avoid stale cached copies. You can also run TifaPredictor.luau directly.
+
+## Features
+
+- Clickable Beequip cards with native game icons, potential and wax-history slots.
+- Storage/Case/Inbox/Permanents sources and detached JSON import.
+- Soft, Hard, Caustic and hypothetical Debug wax selection.
+- Exact weighted batch counts, most-likely-first outcome groups, percentages and full plain-text report copying.
+- Existing wax history preserved unless RESET FIRST is explicitly enabled for a simulated reset.
+- Stop/progress controls and explicit limits for expensive searches.
+
+No real waxes or Turpentine are used. The code does not fire inventory remotes or modify the original predictor’s authentication. It is a new simulation implementation, not a full deobfuscation of Greg’s script.
+
+## Limits and documentation
+
+The module uses the game’s replicated item definitions. Offset counters are instrumented RNG positions; their mapping to Greg’s naming is unverified. Probabilities are conditional on successful waxes and the 32-skip model; server outcomes and full parity against Greg have not been validated. Expensive searches can stop at memory/time limits without returning partial probabilities.
+
+See [the GUI guide](TifaPredictor-GUI-README.md) for controls, semantics and tests. Game images are referenced by the client’s BeequipTypes and WaxTypes definitions; image files are not redistributed here.
+
+The main loader is updated with each completed change. Use this repository’s main URL for future updates rather than an old commit-pinned URL.
