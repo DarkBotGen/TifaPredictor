@@ -29,7 +29,7 @@ local function detached(data, options)
     options = options or {}
     if options.UseOriginalSeed then file.S = file.OS or file.S end
     if options.ShowBase then file.W = nil; file.RC = 0 end
-    if options.ResetWaxes then file.W=nil;file.RC=file.UC or file.RC or 0 end
+    if options.ResetWaxes then file.W=nil;file.RC=file.UC or file.RC or 0;file.S=file.OS or file.S end
     if options.BaseOffset~=nil then file.PredictorBaseOffset=options.BaseOffset end
     local baseOffset=file.PredictorBaseOffset or 0
     assert(type(baseOffset)=="number" and baseOffset%1==0 and baseOffset>=0 and baseOffset<=100000,

@@ -31,7 +31,7 @@ local function detached(data, options)
     options = options or {}
     if options.UseOriginalSeed then file.S = file.OS or file.S end
     if options.ShowBase then file.W = nil; file.RC = 0 end
-    if options.ResetWaxes then file.W=nil;file.RC=file.UC or file.RC or 0 end
+    if options.ResetWaxes then file.W=nil;file.RC=file.UC or file.RC or 0;file.S=file.OS or file.S end
     if options.BaseOffset~=nil then file.PredictorBaseOffset=options.BaseOffset end
     local baseOffset=file.PredictorBaseOffset or 0
     assert(type(baseOffset)=="number" and baseOffset%1==0 and baseOffset>=0 and baseOffset<=100000,
@@ -750,6 +750,8 @@ local inventoryScroll=scroll(inventoryPanel,"Cards",7,36,251,406)
 local cardConnections={}
 local renderInventory
 local advancedButton=button(window,"Options","···",509,7,22,20);advancedButton.BackgroundTransparency=1
+local turpPreview=button(window,"TurpPreview","○ Preview Turp",210,77,145,23)
+turpPreview.Font=Enum.Font.Gotham;turpPreview.TextSize=10
 local planningSummary=label(window,"PlanningSummary","Keep waxes",370,77,220,21,9,C.muted)
 local advancedPanel=make("Frame",window,{Name="AdvancedPanel",Position=UDim2.fromOffset(275,104),
     Size=UDim2.fromOffset(235,204),BackgroundColor3=C.button,BorderSizePixel=0,ZIndex=12,Visible=false})
@@ -895,13 +897,13 @@ local function refreshCurrent()
     itemButton.Text=item and tostring(state.index) or "—"
     if renderInventory then renderInventory() end
     if not item then setText(currentText,currentScroll,"No Beequips in this source.\n\nChoose another source or import item JSON.");return end
-    local displayOptions=options();displayOptions.ResetWaxes=false;displayOptions.ShowBase=state.showBase
+    local displayOptions=options();displayOptions.ShowBase=state.showBase and not state.resetFirst
     local ok,s=pcall(E.Evaluate,item.Data,displayOptions)
     if not ok then setText(currentText,currentScroll,tostring(s));return end
     local waxLabels={[1]="Sf",[2]="Hd",[3]="Cs",[4]="Swrl",[5]="Db"}
     local history={}
     for _,w in ipairs(s.WaxHistory)do history[#history+1]=(waxLabels[w[1]] or tostring(w[1]))..":"..(w[2] and tostring(w[3] or 0) or "fail")end
-    local lines={"CUR | W: "..#s.WaxHistory.."/5",#history>0 and ("("..table.concat(history,", ")..")") or "","",
+    local lines={(state.resetFirst and "AFTER TURP | W: " or "CUR | W: ")..#s.WaxHistory.."/5",#history>0 and ("("..table.concat(history,", ")..")") or "","",
         "Base offset: "..s.BaseOffset,"Offset after turp: "..s.TurpentineOffset,"Current offset: "..s.CurrentOffset,"","-------------------------","",
         "Potential: "..string.format("%.3f",s.Quality*5),"","-------------------------","",describe(s)}
     setText(currentText,currentScroll,table.concat(lines,"\n"))
@@ -962,6 +964,10 @@ local function redraw()
     resetFirst.Visible=true
     resetFirst.Text=(state.resetFirst and "●" or "○").." Reset before search"
     resetFirst.BackgroundColor3=state.resetFirst and C.active or C.panel
+    turpPreview.Text=(state.resetFirst and "●" or "○").." Preview Turp"
+    turpPreview.BackgroundColor3=state.resetFirst and C.active or C.panel
+    turpPreview.Position=UDim2.fromOffset(state.source=="Trade" and 350 or 210,state.source=="Trade" and 7 or 77)
+    turpPreview.Size=UDim2.fromOffset(state.source=="Trade" and 145 or 145,23)
     advancedPanel.Visible=state.advanced
     advancedButton.BackgroundColor3=state.advanced and C.active or C.button
     local baseValue=tonumber(baseOffsetInput.Text) or 0
@@ -987,7 +993,7 @@ local function redraw()
         copyExplore.Position=UDim2.fromOffset(214,416);copyExplore.Size=UDim2.fromOffset(100,22)
     end
     if batch then chainLabel.Text="CHAIN: "..(#state.chain>0 and table.concat(state.chain, " > ") or "ADD waxes to begin") end
-    baseButton.Text=(state.showBase and "●" or "○").."  Show base"
+    baseButton.Text=(state.showBase and not state.resetFirst and "●" or "○").."  Show base"
     seed.Text=explore and ((state.currentSeed and "●" or "○").." Use swirled seed") or (state.currentSeed and "● Current / swirled seed" or "○ Original seed")
     wax.Text=state.wax;resultHeading.Text=guide and "OFFSETS + HIVE BONUSES" or explore and "EXPLORE RESULTS" or "MATCHED RESULTS"
     waxCaption.Text="WAX"
@@ -1108,7 +1114,7 @@ connect(wax.Activated,function()
 end)
 connect(skipPrev.Activated,function()if editable() then skip.Text=tostring(((tonumber(skip.Text) or 1)-2)%math.max(1,remainingSlots())+1);redraw() end end)
 connect(skipNext.Activated,function()if editable() then skip.Text=tostring((tonumber(skip.Text) or 1)%math.max(1,remainingSlots())+1);redraw() end end)
-connect(baseButton.Activated,function()if editable() then state.showBase=not state.showBase;refreshCurrent();redraw() end end)
+connect(baseButton.Activated,function()if editable() then state.showBase=not state.showBase;if state.showBase then state.resetFirst=false end;refreshCurrent();redraw() end end)
 connect(seed.Activated,function()if editable() then state.currentSeed=not state.currentSeed;refreshCurrent();redraw() end end)
 for name,b in pairs(tabs) do connect(b.Activated,function()if editable() then state.tab=name;if name=="GUIDE" then local item=selected();offset.Text=tostring(item and (item.Data.UC or item.Data.RC) or 0);steps.Text="16" elseif name=="EXPLORE" then steps.Text="32";offset.Text="0" end;state.advanced=false;popup.Visible=false;selector.Visible=false;redraw() end end) end
 connect(add.Activated,function()if editable() then
@@ -1155,10 +1161,15 @@ connect(zoom.Activated,function()
     state.source="Import";state.index=1;state.showBase=false;baseOffsetInput.Text=tostring(n);reloadItems();redraw()
     notify("Zoomed copy: unwaxed, base RNG skip "..n..". Original item unchanged.")
 end)
-connect(resetFirst.Activated,function()
-    if editable() then state.resetFirst=not state.resetFirst;redraw()
-        notify(state.resetFirst and "Plan starts after a simulated Turpentine reset. Real item unchanged." or "Plan preserves all existing waxes.") end
-end)
+local function toggleTurpPreview()
+    if not editable() then return end
+    state.resetFirst=not state.resetFirst
+    if state.resetFirst then state.showBase=false end
+    refreshCurrent();redraw()
+    notify(state.resetFirst and "Turpentine preview: waxes removed, original seed, reset offset. Real item unchanged." or "Showing current item with existing waxes.")
+end
+connect(resetFirst.Activated,toggleTurpPreview)
+connect(turpPreview.Activated,toggleTurpPreview)
 connect(baseOffsetInput.FocusLost,function()
     if editable() then refreshCurrent();redraw() end
 end)
