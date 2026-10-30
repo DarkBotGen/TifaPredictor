@@ -1,4 +1,4 @@
--- Tifa's Predictor — readable local simulation UI
+-- Predictor — readable local simulation UI
 local core = (function()
 -- Read-only Beequip simulation core. No remotes, inventory writes, or wax use.
 -- Replays recovered client-side rules on detached data.
