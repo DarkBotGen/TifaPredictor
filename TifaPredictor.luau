@@ -1379,6 +1379,55 @@ local function refreshCurrent()
         "Potential: "..string.format("%.3f",s.Quality*5),"","-------------------------","",describe(s)}
     setText(currentText,currentScroll,table.concat(lines,"\n"))
 end
+local function refreshNextOdds(prefix)
+    if state.tab~="NEXT" then return end
+    state.nextOddsRevision=(state.nextOddsRevision or 0)+1
+    local revision=state.nextOddsRevision
+    local item=selected()
+    if not item then setResults("Choose a Beequip first.");return end
+    local waxName=state.wax
+    local opts=options()
+    local function stale()
+        return not state.alive or state.tab~="NEXT" or revision~=state.nextOddsRevision
+    end
+    opts.Cancelled=stale
+    local candidates={}
+    for i,f in ipairs(filterDefs) do
+        if state.filters[i] then candidates[#candidates+1]=f end
+    end
+    if #candidates==0 then candidates=table.clone(filterDefs) end
+
+    task.defer(function()
+        if stale() then return end
+        local ok,report=pcall(E.OffsetOutcomes,item.Data,waxName,nil,opts)
+        if stale() then return end
+        local lines=prefix and {prefix,""} or {}
+        lines[#lines+1]="NEXT WAX ODDS · "..waxName
+        if not ok then
+            lines[#lines+1]=tostring(report)
+            setResults(table.concat(lines,"\n"))
+            return
+        end
+        lines[#lines+1]="Each stat shows its chance to improve."
+        lines[#lines+1]="SKIP sets the preview roll. Odds use all 32 rolls."
+        lines[#lines+1]=""
+        for _,f in ipairs(candidates) do
+            local baseline=statValue(report.Before,f)
+            local hits=0
+            for _,row in ipairs(report.Rows) do
+                if statValue(row.Result,f)>baseline+1e-9 then hits+=1 end
+            end
+            lines[#lines+1]=f.label
+            lines[#lines+1]=string.format("%d/32 · %.3f%% if successful",hits,hits*100/32)
+            lines[#lines+1]=string.format("%.3f%% per attempt",hits*100/32*report.WaxSuccessRate)
+            lines[#lines+1]=""
+        end
+        if #candidates==0 then lines[#lines+1]="This Beequip has no listed upgrade stats." end
+        lines[#lines+1]="Adjust settings, then press SIMULATE."
+        setResults(table.concat(lines,"\n"))
+    end)
+end
+
 local function refreshFilters()
     state.planHasResults=false
     state.missingPlannerTarget=false
@@ -1411,7 +1460,7 @@ local function refreshFilters()
                 end
             end
             connect(b.Activated,function() if not editable() then return end;state.filters[i]=not state.filters[i];
-                b.BackgroundColor3=state.filters[i] and C.active or C.button;b.Text=(state.filters[i] and "[✓] " or "[ ] ")..candidate.label end)
+                b.BackgroundColor3=state.filters[i] and C.active or C.button;b.Text=(state.filters[i] and "[✓] " or "[ ] ")..candidate.label;refreshNextOdds() end)
         end
     end
     if state.tab=="PLAN" and state.plannerTargets and #state.plannerTargets>0 then
@@ -1517,6 +1566,7 @@ local function redraw()
     nextWax.Size=UDim2.fromOffset(tradeLayout and 140 or 60,25)
     planningSummary.Visible=not tradeLayout
     left.Size=UDim2.fromOffset(190,explore and 280 or 330)
+    refreshNextOdds()
 end
 local function copyText(text)
     if type(setclipboard)=="function" then local ok,err=pcall(setclipboard,text);notify(ok and "Copied to clipboard." or tostring(err))
@@ -1627,7 +1677,7 @@ end)
 local showPlan
 connect(wax.Activated,function()
     if not editable() then return end
-    openSelector("Wax",state.source=="Trade" and 350 or 270,180,{"SoftWax","HardWax","CausticWax","DebugWax"},function(entry)state.wax=entry;redraw();if showPlan then showPlan() end end)
+    openSelector("Wax",state.source=="Trade" and 350 or 270,180,{"SoftWax","HardWax","CausticWax","DebugWax"},function(entry)state.wax=entry;redraw();if showPlan and state.tab~="NEXT" then showPlan() end end)
 end)
 connect(skipPrev.Activated,function()if editable() then skip.Text=tostring(((tonumber(skip.Text) or 1)-2)%math.max(1,remainingSlots())+1);redraw();if showPlan then showPlan()end end end)
 connect(skipNext.Activated,function()if editable() then skip.Text=tostring((tonumber(skip.Text) or 1)%math.max(1,remainingSlots())+1);redraw();if showPlan then showPlan()end end end)
@@ -1670,7 +1720,7 @@ connect(nextWax.Activated,function()
     state.tab="NEXT"
     popup.Visible=false;selector.Visible=false;state.advanced=false
     redraw()
-    setResults("Choose a wax and adjust settings. SKIP 0 samples a random successful roll. Enter 1–32 to choose a specific successful roll. Press SIMULATE to apply it to a working copy.")
+    setResults("Calculating next wax odds… SKIP 0 samples a roll. Enter 1–32 to choose one.")
 end)
 local function simulateNextWax()
     local item=selected()
@@ -1693,7 +1743,7 @@ local function simulateNextWax()
     baseOffsetInput.Text=tostring(result.BaseOffset)
     reloadItems()
     changed()
-    setResults("SIMULATED SUCCESS\n"..state.wax.." · skip "..roll.." / 32\nWaxes: "..#result.WaxHistory.."/5\n\n"..describe(result))
+    refreshNextOdds("SIMULATED SUCCESS\n"..state.wax.." · skip "..roll.." / 32\nWaxes: "..#result.WaxHistory.."/5\n\n"..describe(result))
     notify("Added one successful simulated wax to the working copy.")
 end
 connect(copyData.Activated,function()local item=selected();if item then copyText(Http:JSONEncode(item.Data)) end end)
@@ -1716,7 +1766,7 @@ connect(import.Activated,function()
     if not ok or type(data)~="table" then notify("Invalid item JSON.");return end
     local valid,err=pcall(E.Evaluate,data)
     if not valid then notify(tostring(err));return end
-    state.imported=data;state.source="Import";state.index=1;reloadItems();notify("Imported detached item data.")
+    state.imported=data;state.source="Import";state.index=1;reloadItems();redraw();notify("Imported detached item data.")
 end)
 connect(zoom.Activated,function()
     if not editable() then return end
