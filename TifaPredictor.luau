@@ -1817,18 +1817,32 @@ connect(start.Activated,function()
                     end,nil,opts)
                     local lines={"=== NEXT WAX OUTCOMES ===",item.Data.T,
                         string.format("%d × %s",#chain,state.wax),
-                        "All waxes assumed successful · "..report.Total.." roll sequences",""}
+                        "Total change after all "..#chain.." waxes succeed · "..report.Total.." roll sequences",""}
                     for i,f in ipairs(chosen) do
                         lines[#lines+1]=f.label
                         local values={}
                         for value in pairs(distributions[i]) do values[#values+1]=value end
                         table.sort(values,function(a,b)return a>b end)
                         local baseline=statValue(report.Before,f)
+                        if f.kind=="Ability" then
+                            lines[#lines+1]="Starting ability: "..(baseline>0 and "present" or "absent")
+                        else
+                            local starting=filterDescription(report.Before,f)
+                            lines[#lines+1]="Starting stat: "..(starting==f.label and "absent" or starting)
+                        end
                         for _,value in ipairs(values) do
                             local outcome=distributions[i][value]
                             local percentage=string.format("%.16f",outcome.Count/report.Total*100):gsub("0+$",""):gsub("%.$","")
-                            local unchanged=value==baseline and " · current value" or ""
-                            lines[#lines+1]=outcome.Description..unchanged
+                            local delta=value-baseline
+                            local change
+                            if delta==0 then
+                                change="No change"
+                            elseif f.kind=="Ability" then
+                                change=delta>0 and "Ability gained" or "Ability lost"
+                            else
+                                change=string.format("Total change: %+.12g%s",delta,f.op=="Mul" and " to multiplier" or " stat units")
+                            end
+                            lines[#lines+1]=change.." → "..outcome.Description
                             lines[#lines+1]=string.format("%s%% (%d/%d)",percentage,outcome.Count,report.Total)
                         end
                         lines[#lines+1]=""
