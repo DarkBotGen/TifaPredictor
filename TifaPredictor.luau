@@ -1342,11 +1342,13 @@ local function setResults(text)
     for line in (visibleText.."\n"):gmatch("(.-)\n") do
         if #colored>=400 then colored[#colored+1]="… More results available with COPY.";break end
         local visual=line
+        if state.tab~="NEXT" then
         visual=visual:gsub("([%d]+%.[%d]+)%%",function(value)
             local n=tonumber(value)
             if n>0 and n<0.1 then return "<0.1%" end
             return string.format("%.1f%%",n)
         end)
+        end
         visual=visual:gsub("^Total predicts %-%-> ","Outcomes: "):gsub("^Matched %-%-> ","Matches: ")
         visual=visual:gsub("^%-%-%- INDIVIDUAL CHANCES %-%-%-$","STAT CHANCES")
             :gsub("^%-%-%- COMBINATIONS %-%-%-$","OUTCOMES")
@@ -1723,7 +1725,7 @@ connect(optionsClose.Activated,function()state.advanced=false;redraw()end)
 connect(changePlanTarget.Activated,function()if editable()then state.planHasResults=false;redraw()end end)
 connect(help.Activated,function()
     if not editable() then return end
-    setResults("HOW TO USE\n\n1. Select a Beequip. Existing waxes stay in the simulation.\n2. Choose wax + quantity; ADD makes a mixed plan. REM undoes one; CLR starts over.\n3. Pick the stats you care about, then START. Selecting targets can make large exact searches much faster.\n\nNEXT WAX\nChoose a wax and quantity, select stats, then SIMULATE to calculate the chance each stat improves by the end of the sequence.\n\nOFFSETS\nSet START RC and STEPS, then START to list upgrades by hypothetical offset.\n\nAFTER TURP\nPreview the copied item with waxes removed and its reset seed/offset. Toggle off to return to the real current stats. Your item is unchanged.\n\nCHANCES\nOutcome percentages assume all planned waxes succeed. The results also show all-wax success, success plus target, and destruction risk. Failed Hard waxes can leave a surviving item with other results.\n\nAUTO PLAN\nSelect the target filters, then ··· → FIND BEST WAX PLAN. Set the reset limit and seconds budget. It compares exact completed plans and ranks target-plus-survival chance.\n\nHIVE BONUSES\nUnder ···: compare possible hive bonuses at reset-offset scenarios. These are simulations, not guaranteed resource routes.\n\nLong search? STOP is always available. No real waxes or items are used.")
+    setResults("HOW TO USE\n\n1. Select a Beequip. Existing waxes stay in the simulation.\n2. Choose wax + quantity; ADD makes a mixed plan. REM undoes one; CLR starts over.\n3. Pick the stats you care about, then START. Selecting targets can make large exact searches much faster.\n\nNEXT WAX\nChoose a wax and quantity, select stats, then SIMULATE to show each possible final value and its percentage across successful rolls.\n\nOFFSETS\nSet START RC and STEPS, then START to list upgrades by hypothetical offset.\n\nAFTER TURP\nPreview the copied item with waxes removed and its reset seed/offset. Toggle off to return to the real current stats. Your item is unchanged.\n\nCHANCES\nOutcome percentages assume all planned waxes succeed. The results also show all-wax success, success plus target, and destruction risk. Failed Hard waxes can leave a surviving item with other results.\n\nAUTO PLAN\nSelect the target filters, then ··· → FIND BEST WAX PLAN. Set the reset limit and seconds budget. It compares exact completed plans and ranks target-plus-survival chance.\n\nHIVE BONUSES\nUnder ···: compare possible hive bonuses at reset-offset scenarios. These are simulations, not guaranteed resource routes.\n\nLong search? STOP is always available. No real waxes or items are used.")
 end)
 local function number(text,min,max,labelText)
     local n=tonumber(text);assert(n and n%1==0 and n>=min and n<=max,labelText.." must be "..min.."–"..max);return n
@@ -1788,6 +1790,52 @@ connect(start.Activated,function()
                 end
                 assert(#chain>0,"Choose a wax and press ADD, then START")
                 assert(#chain<=remainingSlots(),"Only "..remainingSlots().." additional wax slot(s) remain; remove waxes from the planned chain.")
+                if state.tab=="NEXT" then
+                    local distributions={}
+                    for i=1,#chosen do distributions[i]={} end
+                    opts.Targets=chosen
+                    local report=E.Batch(item.Data,chain,function(result,_,weight)
+                        for i,f in ipairs(chosen) do
+                            local value=statValue(result,f)
+                            local outcomes=distributions[i]
+                            local outcome=outcomes[value]
+                            if not outcome then
+                                local description
+                                if f.kind=="Ability" then
+                                    description=value>0 and "Ability present" or "Ability absent"
+                                else
+                                    description=filterDescription(result,f)
+                                    if description==f.label then description="Stat absent" end
+                                    description=description.." · value "..tostring(value)
+                                end
+                                outcome={Description=description,Count=0}
+                                outcomes[value]=outcome
+                            end
+                            outcome.Count+=weight
+                        end
+                        return false
+                    end,nil,opts)
+                    local lines={"=== NEXT WAX OUTCOMES ===",item.Data.T,
+                        string.format("%d × %s",#chain,state.wax),
+                        "All waxes assumed successful · "..report.Total.." roll sequences",""}
+                    for i,f in ipairs(chosen) do
+                        lines[#lines+1]=f.label
+                        local values={}
+                        for value in pairs(distributions[i]) do values[#values+1]=value end
+                        table.sort(values,function(a,b)return a>b end)
+                        local baseline=statValue(report.Before,f)
+                        for _,value in ipairs(values) do
+                            local outcome=distributions[i][value]
+                            local percentage=string.format("%.16f",outcome.Count/report.Total*100):gsub("0+$",""):gsub("%.$","")
+                            local unchanged=value==baseline and " · current value" or ""
+                            lines[#lines+1]=outcome.Description..unchanged
+                            lines[#lines+1]=string.format("%s%% (%d/%d)",percentage,outcome.Count,report.Total)
+                        end
+                        lines[#lines+1]=""
+                    end
+                    setResults(table.concat(lines,"\n"))
+                    return
+                end
                 local hits={};for i=1,#chosen do hits[i]=0 end
                 local function predicate(result,before,weight)
                     local any=#chosen==0
@@ -1816,47 +1864,6 @@ connect(start.Activated,function()
                     local bytes,groups=0,0
                     for key in pairs(report.Groups)do bytes+=#key;groups+=1;if bytes>2000000 or groups>5000 then break end end
                     state.batchCache=bytes<=2000000 and groups<=5000 and {Key=cacheKey,Report=report,Hits=table.clone(hits)} or nil
-                end
-                if state.tab=="NEXT" then
-                    local odds={}
-                    for i,count in ipairs(hits) do
-                        odds[i]=count/report.Total*report.AllWaxesSuccessRate
-                    end
-                    -- A failed Hard uses a slot and leaves the preceding rolls intact.
-                    if state.wax=="HardWax" then
-                        local rate=WaxTypes.Get("Hard").SuccessRate
-                        local combinations=1
-                        for successes=1,#chain-1 do
-                            combinations=combinations*(#chain-successes+1)/successes
-                            local mass=combinations*rate^successes*(1-rate)^(#chain-successes)
-                            local shorter=table.create(successes,state.wax)
-                            local partial=table.create(#chosen,0)
-                            local branch=E.Batch(item.Data,shorter,function(result,before,weight)
-                                for i,f in ipairs(chosen) do
-                                    if statValue(result,f)>statValue(before,f)+1e-9 then
-                                        partial[i]+=weight
-                                    end
-                                end
-                                return false
-                            end,nil,opts)
-                            for i,count in ipairs(partial) do
-                                odds[i]+=mass*count/branch.Total
-                            end
-                        end
-                    end
-                    local lines={"=== NEXT WAX ODDS ===",item.Data.T,
-                        string.format("%d × %s",#chain,state.wax),"",
-                        "Chance each selected stat improves by the end of the sequence.",""}
-                    for i,f in ipairs(chosen) do
-                        lines[#lines+1]=f.label
-                        lines[#lines+1]=string.format("%.3f%% per sequence, including failures",odds[i]*100)
-                        lines[#lines+1]=string.format("%.3f%% if every wax succeeds (%d/%d)",hits[i]*100/report.Total,hits[i],report.Total)
-                        lines[#lines+1]=""
-                    end
-                    local _,survival=risk(chain)
-                    lines[#lines+1]=string.format("Beequip destroyed: %.3f%%",(1-survival)*100)
-                    setResults(table.concat(lines,"\n"))
-                    return
                 end
                 local currentOptions=options();currentOptions.ResetWaxes=false
                 local current=E.Evaluate(item.Data,currentOptions)
