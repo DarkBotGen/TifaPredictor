@@ -1,4 +1,4 @@
-**NEXT WAX** appends one randomly sampled successful wax to a detached working copy available under Simulation. **OFFSETS** scans hypothetical reset offsets starting at START RC, with 300 steps by default. It preserves the selected history and groups all 32 successful wax rolls at each offset. Use ALL BONUSES BY OFFSET for reachable reset routes.
+**NEXT WAX** opens setup. Choose a wax, adjust settings, then press **SIMULATE** to append a successful wax to the Simulation copy. Set SKIP to 0 for a random roll or 1–32 for a specific roll. **OFFSETS** scans hypothetical reset offsets starting at START RC, with 300 steps by default. It preserves the selected history and groups all 32 successful wax rolls at each offset. Use ALL BONUSES BY OFFSET for reachable reset routes.
 
 # Predictor GUI
 

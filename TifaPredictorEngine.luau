@@ -213,8 +213,8 @@ function Engine.Single(data, waxName, skip, options)
 end
 
 -- Append one successful roll to a detached copy of the existing wax history.
-function Engine.SimulateNextWax(data, waxName, skip)
-    local file = detached(data)
+function Engine.SimulateNextWax(data, waxName, skip, options)
+    local file = detached(data, options)
     local result = Engine.Single(file, waxName, skip)
     local counter = file.UC
     if counter == nil then

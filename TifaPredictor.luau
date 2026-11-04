@@ -215,8 +215,8 @@ function Engine.Single(data, waxName, skip, options)
 end
 
 -- Append one successful roll to a detached copy of the existing wax history.
-function Engine.SimulateNextWax(data, waxName, skip)
-    local file = detached(data)
+function Engine.SimulateNextWax(data, waxName, skip, options)
+    local file = detached(data, options)
     local result = Engine.Single(file, waxName, skip)
     local counter = file.UC
     if counter == nil then
@@ -1443,11 +1443,11 @@ local function reloadItems()
 end
 local function redraw()
     for name,b in pairs(tabs) do b.BackgroundColor3=name==state.tab and Color3.fromRGB(46,46,46) or C.panel end
-    local explore=state.tab=="EXPLORE";local batch=state.tab=="BATCH";local guide=state.tab=="GUIDE";local planner=state.tab=="PLAN"
+    local explore=state.tab=="EXPLORE";local batch=state.tab=="BATCH";local guide=state.tab=="GUIDE";local planner=state.tab=="PLAN";local nextSetup=state.tab=="NEXT"
     chainLabel.Visible=batch or state.tab=="SINGLE";add.Visible=batch or state.tab=="SINGLE";remove.Visible=add.Visible;clear.Visible=add.Visible;copy.Visible=not explore
     viewStats.Visible=false
-    stepsLabel.Visible=guide or planner or explore;steps.Visible=stepsLabel.Visible;offsetLabel.Visible=planner or explore;offset.Visible=offsetLabel.Visible
-    stepsLabel.Text=explore and "STEPS" or "RESETS";offsetLabel.Text=explore and "START RC" or "SECONDS"
+    stepsLabel.Visible=guide or planner or explore or nextSetup;steps.Visible=stepsLabel.Visible;offsetLabel.Visible=planner or explore;offset.Visible=offsetLabel.Visible
+    stepsLabel.Text=nextSetup and "SKIP" or explore and "STEPS" or "RESETS";offsetLabel.Text=explore and "START RC" or "SECONDS"
     zoom.Visible=false;seed.Visible=true;copyExplore.Visible=explore
     seed.Parent=advancedPanel
     seed.Position=UDim2.fromOffset(10,103)
@@ -1465,8 +1465,8 @@ local function redraw()
     advancedButton.BackgroundColor3=state.advanced and C.active or C.button
     local baseValue=tonumber(baseOffsetInput.Text) or 0
     local remaining=remainingSlots()
-    local added=state.tab=="BATCH" and #state.chain or state.tab=="EXPLORE" and 1 or tonumber(skip.Text) or 1
-    if state.tab~="BATCH" and state.tab~="GUIDE" and not planner then
+    local added=state.tab=="BATCH" and #state.chain or (explore or nextSetup) and 1 or tonumber(skip.Text) or 1
+    if state.tab~="BATCH" and state.tab~="GUIDE" and not planner and not nextSetup then
         skip.Text=tostring(math.clamp(tonumber(skip.Text) or 1,1,math.max(1,remaining)))
         added=state.tab=="EXPLORE" and 1 or tonumber(skip.Text)
     end
@@ -1474,8 +1474,8 @@ local function redraw()
     planningSummary.TextColor3=state.resetFirst and C.green or C.muted
     wax.Visible=not planner and not guide;waxCaption.Visible=not planner and not guide
     turpPreview.Visible=not planner
-    skipTrack.Visible=not guide and not planner;skipPrev.Visible=skipTrack.Visible;skip.Visible=skipTrack.Visible;skipNext.Visible=skipTrack.Visible
-    window.WaxQuantityCaption.Visible=not guide and not planner
+    skipTrack.Visible=not guide and not planner and not nextSetup;skipPrev.Visible=skipTrack.Visible;skip.Visible=skipTrack.Visible;skipNext.Visible=skipTrack.Visible
+    window.WaxQuantityCaption.Visible=not guide and not planner and not nextSetup
     filterHeading.Text=(explore or planner) and "TARGETS (ALL)" or "IMPROVEMENTS (ANY)"
     local wide=guide or planner and state.planHasResults
     changePlanTarget.Visible=planner and state.planHasResults==true
@@ -1485,14 +1485,14 @@ local function redraw()
     resultScroll.Size=UDim2.fromOffset(wide and 366 or 201,244)
     resultText.Size=UDim2.fromOffset(wide and 356 or 191,resultText.Size.Y.Offset)
     if guide then chainLabel.Visible=false;planningSummary.Text="Current RC: "..((selected() and selected().Data.RC) or 0) end
-    if not state.busy then start.Text=planner and "FIND BEST" or guide and "SHOW" or "START" end
+    if not state.busy then start.Text=nextSetup and "SIMULATE" or planner and "FIND BEST" or guide and "SHOW" or "START" end
     if explore then
         copyExplore.Position=UDim2.fromOffset(214,416);copyExplore.Size=UDim2.fromOffset(100,22)
     end
     if batch then chainLabel.Text="CHAIN: "..(#state.chain>0 and table.concat(state.chain, " > ") or "ADD waxes to begin") end
     baseButton.Text=(state.showBase and not state.resetFirst and "●" or "○").."  Show base"
     seed.Text=explore and ((state.currentSeed and "●" or "○").." Use swirled seed") or (state.currentSeed and "● Current / swirled seed" or "○ Original seed")
-    wax.Text=state.wax;resultHeading.Text=planner and "BEST TARGET PLANS" or guide and "OFFSETS + HIVE BONUSES" or explore and "EXPLORER RESULTS" or "MATCHED RESULTS"
+    wax.Text=state.wax;resultHeading.Text=nextSetup and "NEXT WAX SETUP" or planner and "BEST TARGET PLANS" or guide and "OFFSETS + HIVE BONUSES" or explore and "EXPLORER RESULTS" or "MATCHED RESULTS"
     tabs.EXPLORE.Text="OFFSETS";tabs.EXPLORE.TextSize=8
     waxCaption.Text="WAX"
     local tradeLayout=state.source=="Trade"
@@ -1512,6 +1512,7 @@ local function redraw()
         tabs[name].Position=UDim2.fromOffset(tradeLayout and (10+(i-1)*145) or (10+(i-1)*65),75)
         tabs[name].Size=UDim2.fromOffset(tradeLayout and 140 or 60,25)
     end
+    nextWax.BackgroundColor3=nextSetup and Color3.fromRGB(46,46,46) or C.panel
     nextWax.Position=UDim2.fromOffset(tradeLayout and 445 or 205,75)
     nextWax.Size=UDim2.fromOffset(tradeLayout and 140 or 60,25)
     planningSummary.Visible=not tradeLayout
@@ -1665,15 +1666,27 @@ connect(copy.Activated,function()copyText(state.result)end)
 connect(copyExplore.Activated,function()copyText(state.result)end)
 connect(nextWax.Activated,function()
     if not editable() then return end
+    if state.tab~="NEXT" then steps.Text=state.nextSkip or "0" end
+    state.tab="NEXT"
+    popup.Visible=false;selector.Visible=false;state.advanced=false
+    redraw()
+    setResults("Choose a wax and adjust settings. SKIP 0 samples a random successful roll. Enter 1–32 to choose a specific successful roll. Press SIMULATE to apply it to a working copy.")
+end)
+local function simulateNextWax()
     local item=selected()
     if not item then notify("Choose a Beequip first.");return end
-    local roll=math.random(1,32)
-    local ok,copyItem,result=pcall(E.SimulateNextWax,item.Data,state.wax,roll)
+    local requested=tonumber(steps.Text)
+    if not requested or requested%1~=0 or requested<0 or requested>32 then
+        notify("SKIP must be 0 (random) or a whole number from 1 to 32.")
+        return
+    end
+    state.nextSkip=steps.Text
+    local roll=requested==0 and math.random(1,32) or requested
+    local ok,copyItem,result=pcall(E.SimulateNextWax,item.Data,state.wax,roll,options())
     if not ok then notify(tostring(copyItem));return end
     state.simulatedItem=copyItem
     state.source="Simulation"
     state.index=1
-    state.tab="SINGLE"
     state.resetFirst=false
     state.showBase=false
     state.currentSeed=true
@@ -1682,7 +1695,7 @@ connect(nextWax.Activated,function()
     changed()
     setResults("SIMULATED SUCCESS\n"..state.wax.." · skip "..roll.." / 32\nWaxes: "..#result.WaxHistory.."/5\n\n"..describe(result))
     notify("Added one successful simulated wax to the working copy.")
-end)
+end
 connect(copyData.Activated,function()local item=selected();if item then copyText(Http:JSONEncode(item.Data)) end end)
 connect(viewStats.Activated,function()
     if not editable() then return end
@@ -1734,13 +1747,14 @@ connect(optionsClose.Activated,function()state.advanced=false;redraw()end)
 connect(changePlanTarget.Activated,function()if editable()then state.planHasResults=false;redraw()end end)
 connect(help.Activated,function()
     if not editable() then return end
-    setResults("HOW TO USE\n\n1. Select a Beequip. Existing waxes stay in the simulation.\n2. Choose wax + quantity; ADD makes a mixed plan. REM undoes one; CLR starts over.\n3. Pick the stats you care about, then START. Selecting targets can make large exact searches much faster.\n\nNEXT WAX\nAdds one sampled successful roll to a detached working copy.\n\nOFFSETS\nSet START RC and STEPS, then START to list upgrades by hypothetical offset.\n\nAFTER TURP\nPreview the copied item with waxes removed and its reset seed/offset. Toggle off to return to the real current stats. Your item is unchanged.\n\nCHANCES\nOutcome percentages assume all planned waxes succeed. The results also show all-wax success, success plus target, and destruction risk. Failed Hard waxes can leave a surviving item with other results.\n\nAUTO PLAN\nSelect the target filters, then ··· → FIND BEST WAX PLAN. Set the reset limit and seconds budget. It compares exact completed plans and ranks target-plus-survival chance.\n\nHIVE BONUSES\nUnder ···: compare possible hive bonuses at reset-offset scenarios. These are simulations, not guaranteed resource routes.\n\nLong search? STOP is always available. No real waxes or items are used.")
+    setResults("HOW TO USE\n\n1. Select a Beequip. Existing waxes stay in the simulation.\n2. Choose wax + quantity; ADD makes a mixed plan. REM undoes one; CLR starts over.\n3. Pick the stats you care about, then START. Selecting targets can make large exact searches much faster.\n\nNEXT WAX\nChoose wax and settings, then SIMULATE a successful roll on a working copy.\n\nOFFSETS\nSet START RC and STEPS, then START to list upgrades by hypothetical offset.\n\nAFTER TURP\nPreview the copied item with waxes removed and its reset seed/offset. Toggle off to return to the real current stats. Your item is unchanged.\n\nCHANCES\nOutcome percentages assume all planned waxes succeed. The results also show all-wax success, success plus target, and destruction risk. Failed Hard waxes can leave a surviving item with other results.\n\nAUTO PLAN\nSelect the target filters, then ··· → FIND BEST WAX PLAN. Set the reset limit and seconds budget. It compares exact completed plans and ranks target-plus-survival chance.\n\nHIVE BONUSES\nUnder ···: compare possible hive bonuses at reset-offset scenarios. These are simulations, not guaranteed resource routes.\n\nLong search? STOP is always available. No real waxes or items are used.")
 end)
 local function number(text,min,max,labelText)
     local n=tonumber(text);assert(n and n%1==0 and n>=min and n<=max,labelText.." must be "..min.."–"..max);return n
 end
 connect(start.Activated,function()
     if state.busy then state.cancelled=true;notify("Stopping…");return end
+    if state.tab=="NEXT" then simulateNextWax();return end
     local item=selected();if not item then notify("Choose or import a Beequip first.");return end
     if state.tab~="GUIDE" and state.tab~="PLAN" and remainingSlots()==0 then
         setResults("NO WAX SLOTS LEFT\n\nThis item already has five waxes. Turn on After Turp to preview a reset and predict additional waxes. Your real item stays unchanged.")
