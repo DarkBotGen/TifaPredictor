@@ -1280,19 +1280,19 @@ local function beeDescription(item)
     end
     return friendly(item.Stat)..": "..string.format("%.4g",item.Value)
 end
-local function hiveDescription(item)
-    local params=""
-    for k,v in pairs(item.Params or {}) do params..=" "..tostring(v) end
-    local percentages={CriticalPower=true,CriticalChance=true,SuperCritPower=true,SuperCritChance=true,
+local hivePercentages={CriticalPower=true,CriticalChance=true,SuperCritPower=true,SuperCritChance=true,
         ConversionAtHive=true,ContainerSpaceMultiplier=true,HoneyFromTokens=true,BeeMovespeedMultiplier=true,
         BaseProductionRate=true,PollenBonus=true,ConvertRate=true,AbilityTokenLifespan=true,BeeAbilityRate=true,
         BattleBondMultiplier=true,BeeAttackMultiplier=true,BombPollen=true,DamageReduction=true,DodgeChance=true,
         HoneyAtHive=true,HoneyFromInstantConversion=true,HoneyPerGoo=true,Luck=true,MarkDurationMultiplier=true,
         MaxBeeEnergy=true,MonsterCooldownReduction=true,PollenConversion=true,PollenPreserved=true,TicketChance=true,
         TreatBondMultiplier=true}
+local function hiveDescription(item)
+    local params=""
+    for k,v in pairs(item.Params or {}) do params..=" "..tostring(v) end
     local value
     if item.Op=="Mul" then value="x"..string.format("%.4g",item.Value)
-    elseif percentages[item.Type] then value=string.format("%+.3g%%",item.Value*100)
+    elseif hivePercentages[item.Type] then value=string.format("%+.3g%%",item.Value*100)
     else value=string.format("%+.4g",item.Value) end
     local name=friendly(item.Type)..params
     if item.Type=="PollenBonus" and item.Params then
@@ -1300,7 +1300,7 @@ local function hiveDescription(item)
     elseif item.Type=="BaseProductionRate" then name="Convert Rate"..params end
     local description="[Hive Bonus] "..value.." "..name
     if item.FromUpgrade and item.FromUpgrade>0 then
-        local multiplier=percentages[item.Type] and item.Op~="Mul" and 100 or 1
+        local multiplier=hivePercentages[item.Type] and item.Op~="Mul" and 100 or 1
         description..=string.format(" (%.6g+%.6g)",(item.Value-item.FromUpgrade)*multiplier,item.FromUpgrade*multiplier)
     end
     return description
@@ -1725,7 +1725,7 @@ connect(optionsClose.Activated,function()state.advanced=false;redraw()end)
 connect(changePlanTarget.Activated,function()if editable()then state.planHasResults=false;redraw()end end)
 connect(help.Activated,function()
     if not editable() then return end
-    setResults("HOW TO USE\n\n1. Select a Beequip. Existing waxes stay in the simulation.\n2. Choose wax + quantity; ADD makes a mixed plan. REM undoes one; CLR starts over.\n3. Pick the stats you care about, then START. Selecting targets can make large exact searches much faster.\n\nNEXT WAX\nChoose a wax and quantity, select stats, then SIMULATE to show each possible final value and its percentage across successful rolls.\n\nOFFSETS\nSet START RC and STEPS, then START to list upgrades by hypothetical offset.\n\nAFTER TURP\nPreview the copied item with waxes removed and its reset seed/offset. Toggle off to return to the real current stats. Your item is unchanged.\n\nCHANCES\nOutcome percentages assume all planned waxes succeed. The results also show all-wax success, success plus target, and destruction risk. Failed Hard waxes can leave a surviving item with other results.\n\nAUTO PLAN\nSelect the target filters, then ··· → FIND BEST WAX PLAN. Set the reset limit and seconds budget. It compares exact completed plans and ranks target-plus-survival chance.\n\nHIVE BONUSES\nUnder ···: compare possible hive bonuses at reset-offset scenarios. These are simulations, not guaranteed resource routes.\n\nLong search? STOP is always available. No real waxes or items are used.")
+    setResults("HOW TO USE\n\n1. Select a Beequip. Existing waxes stay in the simulation.\n2. Choose wax + quantity; ADD makes a mixed plan. REM undoes one; CLR starts over.\n3. Pick the stats you care about, then START. Selecting targets can make large exact searches much faster.\n\nNEXT WAX\nChoose a wax and quantity, select stats, then SIMULATE to show one combined chance and total gain range per selected stat.\n\nOFFSETS\nSet START RC and STEPS, then START to list upgrades by hypothetical offset.\n\nAFTER TURP\nPreview the copied item with waxes removed and its reset seed/offset. Toggle off to return to the real current stats. Your item is unchanged.\n\nCHANCES\nOutcome percentages assume all planned waxes succeed. The results also show all-wax success, success plus target, and destruction risk. Failed Hard waxes can leave a surviving item with other results.\n\nAUTO PLAN\nSelect the target filters, then ··· → FIND BEST WAX PLAN. Set the reset limit and seconds budget. It compares exact completed plans and ranks target-plus-survival chance.\n\nHIVE BONUSES\nUnder ···: compare possible hive bonuses at reset-offset scenarios. These are simulations, not guaranteed resource routes.\n\nLong search? STOP is always available. No real waxes or items are used.")
 end)
 local function number(text,min,max,labelText)
     local n=tonumber(text);assert(n and n%1==0 and n>=min and n<=max,labelText.." must be "..min.."–"..max);return n
@@ -1791,61 +1791,42 @@ connect(start.Activated,function()
                 assert(#chain>0,"Choose a wax and press ADD, then START")
                 assert(#chain<=remainingSlots(),"Only "..remainingSlots().." additional wax slot(s) remain; remove waxes from the planned chain.")
                 if state.tab=="NEXT" then
-                    local distributions={}
-                    for i=1,#chosen do distributions[i]={} end
+                    local improvements={}
+                    for i=1,#chosen do improvements[i]={Count=0} end
                     opts.Targets=chosen
-                    local report=E.Batch(item.Data,chain,function(result,_,weight)
+                    local report=E.Batch(item.Data,chain,function(result,before,weight)
                         for i,f in ipairs(chosen) do
-                            local value=statValue(result,f)
-                            local outcomes=distributions[i]
-                            local outcome=outcomes[value]
-                            if not outcome then
-                                local description
-                                if f.kind=="Ability" then
-                                    description=value>0 and "Ability present" or "Ability absent"
-                                else
-                                    description=filterDescription(result,f)
-                                    if description==f.label then description="Stat absent" end
-                                    description=description.." · value "..tostring(value)
-                                end
-                                outcome={Description=description,Count=0}
-                                outcomes[value]=outcome
+                            local gain=statValue(result,f)-statValue(before,f)
+                            if gain>1e-9 then
+                                local outcome=improvements[i]
+                                outcome.Count+=weight
+                                outcome.Min=math.min(outcome.Min or gain,gain)
+                                outcome.Max=math.max(outcome.Max or gain,gain)
                             end
-                            outcome.Count+=weight
                         end
                         return false
                     end,nil,opts)
                     local lines={"=== NEXT WAX OUTCOMES ===",item.Data.T,
                         string.format("%d × %s",#chain,state.wax),
-                        "Total change after all "..#chain.." waxes succeed · "..report.Total.." roll sequences",""}
+                        "Total gain after all "..#chain.." waxes succeed",""}
                     for i,f in ipairs(chosen) do
-                        lines[#lines+1]=f.label
-                        local values={}
-                        for value in pairs(distributions[i]) do values[#values+1]=value end
-                        table.sort(values,function(a,b)return a>b end)
-                        local baseline=statValue(report.Before,f)
-                        if f.kind=="Ability" then
-                            lines[#lines+1]="Starting ability: "..(baseline>0 and "present" or "absent")
-                        else
-                            local starting=filterDescription(report.Before,f)
-                            lines[#lines+1]="Starting stat: "..(starting==f.label and "absent" or starting)
-                        end
-                        for _,value in ipairs(values) do
-                            local outcome=distributions[i][value]
-                            local percentage=string.format("%.16f",outcome.Count/report.Total*100):gsub("0+$",""):gsub("%.$","")
-                            local delta=value-baseline
-                            local change
-                            if delta==0 then
-                                change="No change"
-                            elseif f.kind=="Ability" then
-                                change=delta>0 and "Ability gained" or "Ability lost"
+                        local outcome=improvements[i]
+                        local gain="No increase"
+                        if outcome.Count>0 then
+                            if f.kind=="Ability" then
+                                gain="Ability gained"
                             else
-                                change=string.format("Total change: %+.12g%s",delta,f.op=="Mul" and " to multiplier" or " stat units")
+                                local percentagePoints=f.kind=="Hive" and f.op~="Mul" and hivePercentages[f.name]
+                                local scale=percentagePoints and 100 or 1
+                                gain=string.format("%+.12g",outcome.Min*scale)
+                                if outcome.Max-outcome.Min>1e-9 then
+                                    gain=gain.." to "..string.format("%+.12g",outcome.Max*scale)
+                                end
+                                gain=gain..(percentagePoints and " pp" or f.op=="Mul" and " to multiplier" or "")
                             end
-                            lines[#lines+1]=change.." → "..outcome.Description
-                            lines[#lines+1]=string.format("%s%% (%d/%d)",percentage,outcome.Count,report.Total)
                         end
-                        lines[#lines+1]=""
+                        local percentage=string.format("%.16f",outcome.Count/report.Total*100):gsub("0+$",""):gsub("%.$","")
+                        lines[#lines+1]=string.format("%s · %s · %s%% (%d/%d)",f.label,gain,percentage,outcome.Count,report.Total)
                     end
                     setResults(table.concat(lines,"\n"))
                     return
