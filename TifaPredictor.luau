@@ -214,6 +214,22 @@ function Engine.Single(data, waxName, skip, options)
     return result
 end
 
+-- Append one successful roll to a detached copy of the existing wax history.
+function Engine.SimulateNextWax(data, waxName, skip)
+    local file = detached(data)
+    local result = Engine.Single(file, waxName, skip)
+    local counter = file.UC
+    if counter == nil then
+        counter = file.RC or 0
+        for _, entry in ipairs(file.W or {}) do
+            if entry[1] ~= 4 then counter += 1 end
+        end
+    end
+    file.W = result.WaxHistory
+    file.UC = counter + 1
+    return file, result
+end
+
 -- Full snapshots for every legal next-wax skip. Final draw count is not a state key:
 -- distinct upgrade histories can finish at the same absolute RNG position.
 function Engine.OffsetOutcomes(data,waxName,predicate,options)
@@ -1142,6 +1158,7 @@ skipPrev.BackgroundColor3=C.panel;skip.BackgroundColor3=C.panel;skipNext.Backgro
 local baseButton=button(window,"ShowBase","○  Show base",520,45,72,23)
 baseButton.BackgroundTransparency=1;baseButton.Font=Enum.Font.Gotham;baseButton.TextSize=9
 local tabs={}
+local nextWax=button(window,"NextWax","NEXT WAX",205,75,60,25)
 for i,name in ipairs({"SINGLE","BATCH","EXPLORE"}) do tabs[name]=button(window,name,name,10+(i-1)*65,75,60,25) end
 local function pane(name,x,w)
     local p=make("Frame",window,{Name=name,Position=UDim2.fromOffset(x,106),Size=UDim2.fromOffset(w,280),
@@ -1408,7 +1425,9 @@ local function refreshFilters()
 end
 local function reloadItems()
     state.items={}
-    if state.source=="Import" then
+    if state.source=="Simulation" then
+        state.items[1]={Location="Simulation",Index=1,Data=state.simulatedItem}
+    elseif state.source=="Import" then
         if state.imported then state.items[1]={Location="Import",Index=1,Data=state.imported} end
     elseif state.source=="Trade" then
         state.items=state.tradeItems or {}
@@ -1427,8 +1446,8 @@ local function redraw()
     local explore=state.tab=="EXPLORE";local batch=state.tab=="BATCH";local guide=state.tab=="GUIDE";local planner=state.tab=="PLAN"
     chainLabel.Visible=batch or state.tab=="SINGLE";add.Visible=batch or state.tab=="SINGLE";remove.Visible=add.Visible;clear.Visible=add.Visible;copy.Visible=not explore
     viewStats.Visible=false
-    stepsLabel.Visible=guide or planner;steps.Visible=guide or planner;offsetLabel.Visible=planner;offset.Visible=planner
-    stepsLabel.Text="RESETS";offsetLabel.Text="SECONDS"
+    stepsLabel.Visible=guide or planner or explore;steps.Visible=stepsLabel.Visible;offsetLabel.Visible=planner or explore;offset.Visible=offsetLabel.Visible
+    stepsLabel.Text=explore and "STEPS" or "RESETS";offsetLabel.Text=explore and "START RC" or "SECONDS"
     zoom.Visible=false;seed.Visible=true;copyExplore.Visible=explore
     seed.Parent=advancedPanel
     seed.Position=UDim2.fromOffset(10,103)
@@ -1440,8 +1459,8 @@ local function redraw()
     resetFirst.BackgroundColor3=state.resetFirst and C.active or C.panel
     turpPreview.Text=(state.resetFirst and "●" or "○").." After Turp"
     turpPreview.BackgroundColor3=state.resetFirst and C.active or C.panel
-    turpPreview.Position=UDim2.fromOffset(state.source=="Trade" and 350 or 210,state.source=="Trade" and 7 or 77)
-    turpPreview.Size=UDim2.fromOffset(state.source=="Trade" and 145 or 145,23)
+    turpPreview.Position=UDim2.fromOffset(state.source=="Trade" and 350 or 270,state.source=="Trade" and 7 or 77)
+    turpPreview.Size=UDim2.fromOffset(state.source=="Trade" and 145 or 90,23)
     advancedPanel.Visible=state.advanced
     advancedButton.BackgroundColor3=state.advanced and C.active or C.button
     local baseValue=tonumber(baseOffsetInput.Text) or 0
@@ -1473,8 +1492,8 @@ local function redraw()
     if batch then chainLabel.Text="CHAIN: "..(#state.chain>0 and table.concat(state.chain, " > ") or "ADD waxes to begin") end
     baseButton.Text=(state.showBase and not state.resetFirst and "●" or "○").."  Show base"
     seed.Text=explore and ((state.currentSeed and "●" or "○").." Use swirled seed") or (state.currentSeed and "● Current / swirled seed" or "○ Original seed")
-    wax.Text=state.wax;resultHeading.Text=planner and "BEST TARGET PLANS" or guide and "OFFSETS + HIVE BONUSES" or explore and "NEXT WAX OUTCOMES" or "MATCHED RESULTS"
-    tabs.EXPLORE.Text="NEXT WAX";tabs.EXPLORE.TextSize=8
+    wax.Text=state.wax;resultHeading.Text=planner and "BEST TARGET PLANS" or guide and "OFFSETS + HIVE BONUSES" or explore and "EXPLORER RESULTS" or "MATCHED RESULTS"
+    tabs.EXPLORE.Text="OFFSETS";tabs.EXPLORE.TextSize=8
     waxCaption.Text="WAX"
     local tradeLayout=state.source=="Trade"
     source.Size=UDim2.fromOffset(tradeLayout and 82 or 110,23)
@@ -1490,9 +1509,11 @@ local function redraw()
     skip.Position=UDim2.fromOffset(tradeLayout and 494 or 414,45)
     skipNext.Position=UDim2.fromOffset(tradeLayout and 566 or 486,45)
     for i,name in ipairs({"SINGLE","BATCH","EXPLORE"}) do
-        tabs[name].Position=UDim2.fromOffset(tradeLayout and (10+(i-1)*195) or (10+(i-1)*65),75)
-        tabs[name].Size=UDim2.fromOffset(tradeLayout and 190 or 60,25)
+        tabs[name].Position=UDim2.fromOffset(tradeLayout and (10+(i-1)*145) or (10+(i-1)*65),75)
+        tabs[name].Size=UDim2.fromOffset(tradeLayout and 140 or 60,25)
     end
+    nextWax.Position=UDim2.fromOffset(tradeLayout and 445 or 205,75)
+    nextWax.Size=UDim2.fromOffset(tradeLayout and 140 or 60,25)
     planningSummary.Visible=not tradeLayout
     left.Size=UDim2.fromOffset(190,explore and 280 or 330)
 end
@@ -1583,7 +1604,9 @@ local function openSelector(kind,x,width,entries,choose)
 end
 connect(source.Activated,function()
     if not editable() then return end
-    openSelector("Source",10,140,{"Storage","Case","Inbox","Trade","Import"},function(entry)
+    local entries={"Storage","Case","Inbox","Trade","Import"}
+    if state.simulatedItem then entries[#entries+1]="Simulation" end
+    openSelector("Source",10,140,entries,function(entry)
         state.source=entry;state.index=1;state.chain={};reloadItems();redraw();setResults("Choose filters or press START.")
     end)
 end)
@@ -1609,7 +1632,7 @@ connect(skipPrev.Activated,function()if editable() then skip.Text=tostring(((ton
 connect(skipNext.Activated,function()if editable() then skip.Text=tostring((tonumber(skip.Text) or 1)%math.max(1,remainingSlots())+1);redraw();if showPlan then showPlan()end end end)
 connect(baseButton.Activated,function()if editable() then state.showBase=not state.showBase;if state.showBase then state.resetFirst=false end;refreshCurrent();redraw() end end)
 connect(seed.Activated,function()if editable() then state.currentSeed=not state.currentSeed;refreshCurrent();redraw() end end)
-for name,b in pairs(tabs) do connect(b.Activated,function()if editable() then state.tab=name;if name=="PLAN" then steps.Text="1";offset.Text="8" end;if name=="SINGLE" then state.chain={} end;if name=="GUIDE" then steps.Text="3" elseif name=="EXPLORE" then steps.Text="32";offset.Text="0" end;state.advanced=false;popup.Visible=false;selector.Visible=false;redraw() end end) end
+for name,b in pairs(tabs) do connect(b.Activated,function()if editable() then state.tab=name;if name=="PLAN" then steps.Text="1";offset.Text="8" end;if name=="SINGLE" then state.chain={} end;if name=="GUIDE" then steps.Text="3" elseif name=="EXPLORE" then steps.Text="300";offset.Text=tostring((selected() and selected().Data.RC) or 0) end;state.advanced=false;popup.Visible=false;selector.Visible=false;redraw() end end) end
 local function risk(chain)
     local success,survival=1,1
     for _,name in ipairs(chain) do
@@ -1640,6 +1663,26 @@ connect(remove.Activated,function()if editable() then table.remove(state.chain);
 connect(clear.Activated,function()if editable() then state.chain={};redraw();showPlan() end end)
 connect(copy.Activated,function()copyText(state.result)end)
 connect(copyExplore.Activated,function()copyText(state.result)end)
+connect(nextWax.Activated,function()
+    if not editable() then return end
+    local item=selected()
+    if not item then notify("Choose a Beequip first.");return end
+    local roll=math.random(1,32)
+    local ok,copyItem,result=pcall(E.SimulateNextWax,item.Data,state.wax,roll)
+    if not ok then notify(tostring(copyItem));return end
+    state.simulatedItem=copyItem
+    state.source="Simulation"
+    state.index=1
+    state.tab="SINGLE"
+    state.resetFirst=false
+    state.showBase=false
+    state.currentSeed=true
+    baseOffsetInput.Text=tostring(result.BaseOffset)
+    reloadItems()
+    changed()
+    setResults("SIMULATED SUCCESS\n"..state.wax.." · skip "..roll.." / 32\nWaxes: "..#result.WaxHistory.."/5\n\n"..describe(result))
+    notify("Added one successful simulated wax to the working copy.")
+end)
 connect(copyData.Activated,function()local item=selected();if item then copyText(Http:JSONEncode(item.Data)) end end)
 connect(viewStats.Activated,function()
     if not editable() then return end
@@ -1691,7 +1734,7 @@ connect(optionsClose.Activated,function()state.advanced=false;redraw()end)
 connect(changePlanTarget.Activated,function()if editable()then state.planHasResults=false;redraw()end end)
 connect(help.Activated,function()
     if not editable() then return end
-    setResults("HOW TO USE\n\n1. Select a Beequip. Existing waxes stay in the simulation.\n2. Choose wax + quantity; ADD makes a mixed plan. REM undoes one; CLR starts over.\n3. Pick the stats you care about, then START. Selecting targets can make large exact searches much faster.\n\nNEXT WAX\nShows all 32 possible successful rolls for one extra wax. You cannot choose which roll the game gives you.\n\nAFTER TURP\nPreview the copied item with waxes removed and its reset seed/offset. Toggle off to return to the real current stats. Your item is unchanged.\n\nCHANCES\nOutcome percentages assume all planned waxes succeed. The results also show all-wax success, success plus target, and destruction risk. Failed Hard waxes can leave a surviving item with other results.\n\nAUTO PLAN\nSelect the target filters, then ··· → FIND BEST WAX PLAN. Set the reset limit and seconds budget. It compares exact completed plans and ranks target-plus-survival chance.\n\nHIVE BONUSES\nUnder ···: compare possible hive bonuses at reset-offset scenarios. These are simulations, not guaranteed resource routes.\n\nLong search? STOP is always available. No real waxes or items are used.")
+    setResults("HOW TO USE\n\n1. Select a Beequip. Existing waxes stay in the simulation.\n2. Choose wax + quantity; ADD makes a mixed plan. REM undoes one; CLR starts over.\n3. Pick the stats you care about, then START. Selecting targets can make large exact searches much faster.\n\nNEXT WAX\nAdds one sampled successful roll to a detached working copy.\n\nOFFSETS\nSet START RC and STEPS, then START to list upgrades by hypothetical offset.\n\nAFTER TURP\nPreview the copied item with waxes removed and its reset seed/offset. Toggle off to return to the real current stats. Your item is unchanged.\n\nCHANCES\nOutcome percentages assume all planned waxes succeed. The results also show all-wax success, success plus target, and destruction risk. Failed Hard waxes can leave a surviving item with other results.\n\nAUTO PLAN\nSelect the target filters, then ··· → FIND BEST WAX PLAN. Set the reset limit and seconds budget. It compares exact completed plans and ranks target-plus-survival chance.\n\nHIVE BONUSES\nUnder ···: compare possible hive bonuses at reset-offset scenarios. These are simulations, not guaranteed resource routes.\n\nLong search? STOP is always available. No real waxes or items are used.")
 end)
 local function number(text,min,max,labelText)
     local n=tonumber(text);assert(n and n%1==0 and n>=min and n<=max,labelText.." must be "..min.."–"..max);return n
@@ -1986,44 +2029,58 @@ connect(start.Activated,function()
                 lines[#lines+1]="All offsets in this bounded Soft/Turpentine reachability range are included. More resets can reach further offsets. Reset-counter model must be rechecked against the actual item."
                 setResults(table.concat(lines,"\n"))
             else
-                local from=0
-                local count=32
-                local report=E.OffsetOutcomes(item.Data,state.wax,function(result,before)
-                    for _,f in ipairs(chosen) do
-                        if statValue(result,f)<=statValue(before,f)+1e-9 then return false end
-                    end
-                    return true
-                end,opts)
-                local matched=0
-                for _,row in ipairs(report.Rows)do
-                    row.Matched=row.Matched and row.Skip>from and row.Skip<=math.min(32,from+count)
-                    if row.Matched then matched+=1 end
+                local first=number(offset.Text,0,100000,"Start RC")
+                local count=number(steps.Text,1,1000,"Steps")
+                assert(first+count-1<=100000,"The last RC must be at most 100000")
+                local current=E.Evaluate(item.Data,opts)
+                local lines={"=== EXPLORER RESULTS ===","Base Item Index: "..item.Index,
+                    "Simulating Wax: "..state.wax,"Steps: "..count,
+                    "Scan: hypothetical reset offsets (RC), "..first.."–"..(first+count-1),"",
+                    "=== CURRENT STATS ===","","CUR | W: "..#current.WaxHistory.."/5","-------------------------",
+                    "Base offset: "..current.BaseOffset,"Offset after turp: "..current.TurpentineOffset,
+                    "Current offset: "..current.CurrentOffset,"","-------------------------",
+                    "Potential: "..string.format("%.3f",current.Quality*5),"","-------------------------"}
+                for _,v in ipairs(current.Bee) do lines[#lines+1]="- "..beeDescription(v) end
+                for _,v in ipairs(current.Abilities) do lines[#lines+1]="- Ability: "..v[1] end
+                if #current.Hive>0 then
+                    lines[#lines+1]="";lines[#lines+1]="[HIVE]"
+                    for _,v in ipairs(current.Hive) do lines[#lines+1]="- "..hiveDescription(v) end
                 end
-                report.Matched=matched;report.ConditionalMatchRate=matched/32
-                report.SuccessAndMatchRate=report.ConditionalMatchRate*report.WaxSuccessRate
-                local function pct(v)return string.format("%.4f%%",v*100)end
-                local lines={"NEXT WAX: WHAT COULD HAPPEN",state.wax,
-                    "Matches: "..report.Matched.." / 32",
-                    "Target if wax succeeds: "..pct(report.ConditionalMatchRate),
-                    "Wax succeeds + target: "..pct(report.SuccessAndMatchRate),
-                    "Reset skip (RC): "..report.Before.TurpentineOffset,
-                    "Showing skips "..(from+1).."–"..math.min(32,from+count).." (32 possible overall).",""}
-                for _,row in ipairs(report.Rows) do
-                    if row.Matched then
-                        local result=row.Result
-                        local trace=result.OffsetTrace
-                        local w=trace.Waxes[#trace.Waxes]
-                        lines[#lines+1]="POSSIBLE ROLL "..row.Skip.." · offset "..row.FinalOffset
-                        if w then
-                            lines[#lines+1]="Before skip "..w.Start.." → after skip "..w.AfterSkip.." → after wax rolls "..w.Finish
-                            lines[#lines+1]="Upgrade-ability draws after wax: "..(trace.Final-trace.AfterWaxRolls)
+                lines[#lines+1]="";lines[#lines+1]="=== UPGRADES ==="
+                local candidates=#chosen>0 and chosen or filterDefs
+                local reportProgress=opts.OnProgress
+                opts.OnProgress=nil
+                local matches=0
+                for rc=first,first+count-1 do
+                    opts.Offset=rc
+                    local report=E.OffsetOutcomes(item.Data,state.wax,nil,opts)
+                    local hits={}
+                    for _,row in ipairs(report.Rows) do
+                        local upgrades={}
+                        for _,f in ipairs(candidates) do
+                            if statValue(row.Result,f)>statValue(report.Before,f)+1e-9 then
+                                upgrades[#upgrades+1]=filterDescription(row.Result,f)
+                            end
                         end
-                        lines[#lines+1]="This branch: 1/32 if successful; "..pct(row.SuccessAndBranchProbability).." including success."
-                        lines[#lines+1]=describe(result).."\n"
+                        if #upgrades>0 and (#chosen==0 or #upgrades==#chosen) then
+                            local key=table.concat(upgrades,"\n  + ")
+                            hits[key]=(hits[key] or 0)+1
+                        end
                     end
+                    if next(hits) then
+                        matches+=1
+                        lines[#lines+1]="[Offset: "..rc.."]"
+                        local keys={}
+                        for key in pairs(hits) do keys[#keys+1]=key end
+                        table.sort(keys)
+                        for _,key in ipairs(keys) do
+                            lines[#lines+1]="  + "..key..string.format(" · %d/32 successful rolls · %.3f%% including wax success",hits[key],100*hits[key]/32*report.WaxSuccessRate)
+                        end
+                    end
+                    reportProgress(rc-first+1,count)
+                    if (rc-first)%4==3 then task.wait() end
                 end
-                lines[#lines+1]="The same final draw can have different stats. Seed, RC and full wax history determine the result."
-                lines[#lines+1]="Wax skips are random, not controllable offsets. These chances describe this attempt, not repeated-retry odds."
+                if matches==0 then lines[#lines+1]="No matching upgrades in this range." end
                 setResults(table.concat(lines,"\n"))
             end
         end,function(e)return tostring(e)end)

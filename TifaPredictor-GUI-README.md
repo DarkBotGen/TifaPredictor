@@ -1,3 +1,5 @@
+**NEXT WAX** appends one randomly sampled successful wax to a detached working copy available under Simulation. **OFFSETS** scans hypothetical reset offsets starting at START RC, with 300 steps by default. It preserves the selected history and groups all 32 successful wax rolls at each offset. Use ALL BONUSES BY OFFSET for reachable reset routes.
+
 # Predictor GUI
 
 Target-free overview: ··· → ALL BONUSES BY OFFSET. RESETS selects 0..10 Soft/Turpentine cycles (default 3). It checks every RC reachable within that limit and shows best individual hive-bonus values and abilities, exact hit counts, chances and finisher risk. It compares Soft, Hard, one Caustic, Soft/Hard and Soft/Caustic when slots allow. See All-offset-bonuses.md. Automatic planning now uses Soft-only reset setup and at most one Caustic per finishing chain.

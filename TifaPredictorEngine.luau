@@ -212,6 +212,22 @@ function Engine.Single(data, waxName, skip, options)
     return result
 end
 
+-- Append one successful roll to a detached copy of the existing wax history.
+function Engine.SimulateNextWax(data, waxName, skip)
+    local file = detached(data)
+    local result = Engine.Single(file, waxName, skip)
+    local counter = file.UC
+    if counter == nil then
+        counter = file.RC or 0
+        for _, entry in ipairs(file.W or {}) do
+            if entry[1] ~= 4 then counter += 1 end
+        end
+    end
+    file.W = result.WaxHistory
+    file.UC = counter + 1
+    return file, result
+end
+
 -- Full snapshots for every legal next-wax skip. Final draw count is not a state key:
 -- distinct upgrade histories can finish at the same absolute RNG position.
 function Engine.OffsetOutcomes(data,waxName,predicate,options)
