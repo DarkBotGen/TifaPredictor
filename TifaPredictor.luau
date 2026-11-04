@@ -1495,7 +1495,7 @@ local function redraw()
     if batch then chainLabel.Text="CHAIN: "..(#state.chain>0 and table.concat(state.chain, " > ") or "ADD waxes to begin") end
     baseButton.Text=(state.showBase and not state.resetFirst and "●" or "○").."  Show base"
     seed.Text=explore and ((state.currentSeed and "●" or "○").." Use swirled seed") or (state.currentSeed and "● Current / swirled seed" or "○ Original seed")
-    wax.Text=state.wax;resultHeading.Text=nextSetup and "NEXT WAX SETUP" or planner and "BEST TARGET PLANS" or guide and "OFFSETS + HIVE BONUSES" or explore and "EXPLORER RESULTS" or "MATCHED RESULTS"
+    wax.Text=state.wax;resultHeading.Text=nextSetup and "MATCHED RESULTS" or planner and "BEST TARGET PLANS" or guide and "OFFSETS + HIVE BONUSES" or explore and "EXPLORER RESULTS" or "MATCHED RESULTS"
     tabs.EXPLORE.Text="OFFSETS";tabs.EXPLORE.TextSize=8
     waxCaption.Text="WAX"
     local tradeLayout=state.source=="Trade"
@@ -1725,7 +1725,7 @@ connect(optionsClose.Activated,function()state.advanced=false;redraw()end)
 connect(changePlanTarget.Activated,function()if editable()then state.planHasResults=false;redraw()end end)
 connect(help.Activated,function()
     if not editable() then return end
-    setResults("HOW TO USE\n\n1. Select a Beequip. Existing waxes stay in the simulation.\n2. Choose wax + quantity; ADD makes a mixed plan. REM undoes one; CLR starts over.\n3. Pick the stats you care about, then START. Selecting targets can make large exact searches much faster.\n\nNEXT WAX\nChoose a wax and quantity, select stats, then SIMULATE to show one combined chance and total gain range per selected stat.\n\nOFFSETS\nSet START RC and STEPS, then START to list upgrades by hypothetical offset.\n\nAFTER TURP\nPreview the copied item with waxes removed and its reset seed/offset. Toggle off to return to the real current stats. Your item is unchanged.\n\nCHANCES\nOutcome percentages assume all planned waxes succeed. The results also show all-wax success, success plus target, and destruction risk. Failed Hard waxes can leave a surviving item with other results.\n\nAUTO PLAN\nSelect the target filters, then ··· → FIND BEST WAX PLAN. Set the reset limit and seconds budget. It compares exact completed plans and ranks target-plus-survival chance.\n\nHIVE BONUSES\nUnder ···: compare possible hive bonuses at reset-offset scenarios. These are simulations, not guaranteed resource routes.\n\nLong search? STOP is always available. No real waxes or items are used.")
+    setResults("HOW TO USE\n\n1. Select a Beequip. Existing waxes stay in the simulation.\n2. Choose wax + quantity; ADD makes a mixed plan. REM undoes one; CLR starts over.\n3. Pick the stats you care about, then START. Selecting targets can make large exact searches much faster.\n\nNEXT WAX\nChoose a wax and quantity, select stats, then SIMULATE to show matching improvements, stat chances, and resulting values.\n\nOFFSETS\nSet START RC and STEPS, then START to list upgrades by hypothetical offset.\n\nAFTER TURP\nPreview the copied item with waxes removed and its reset seed/offset. Toggle off to return to the real current stats. Your item is unchanged.\n\nCHANCES\nOutcome percentages assume all planned waxes succeed. The results also show all-wax success, success plus target, and destruction risk. Failed Hard waxes can leave a surviving item with other results.\n\nAUTO PLAN\nSelect the target filters, then ··· → FIND BEST WAX PLAN. Set the reset limit and seconds budget. It compares exact completed plans and ranks target-plus-survival chance.\n\nHIVE BONUSES\nUnder ···: compare possible hive bonuses at reset-offset scenarios. These are simulations, not guaranteed resource routes.\n\nLong search? STOP is always available. No real waxes or items are used.")
 end)
 local function number(text,min,max,labelText)
     local n=tonumber(text);assert(n and n%1==0 and n>=min and n<=max,labelText.." must be "..min.."–"..max);return n
@@ -1790,47 +1790,6 @@ connect(start.Activated,function()
                 end
                 assert(#chain>0,"Choose a wax and press ADD, then START")
                 assert(#chain<=remainingSlots(),"Only "..remainingSlots().." additional wax slot(s) remain; remove waxes from the planned chain.")
-                if state.tab=="NEXT" then
-                    local improvements={}
-                    for i=1,#chosen do improvements[i]={Count=0} end
-                    opts.Targets=chosen
-                    local report=E.Batch(item.Data,chain,function(result,before,weight)
-                        for i,f in ipairs(chosen) do
-                            local gain=statValue(result,f)-statValue(before,f)
-                            if gain>1e-9 then
-                                local outcome=improvements[i]
-                                outcome.Count+=weight
-                                outcome.Min=math.min(outcome.Min or gain,gain)
-                                outcome.Max=math.max(outcome.Max or gain,gain)
-                            end
-                        end
-                        return false
-                    end,nil,opts)
-                    local lines={"=== NEXT WAX OUTCOMES ===",item.Data.T,
-                        string.format("%d × %s",#chain,state.wax),
-                        "Total gain after all "..#chain.." waxes succeed",""}
-                    for i,f in ipairs(chosen) do
-                        local outcome=improvements[i]
-                        local gain="No increase"
-                        if outcome.Count>0 then
-                            if f.kind=="Ability" then
-                                gain="Ability gained"
-                            else
-                                local percentagePoints=f.kind=="Hive" and f.op~="Mul" and hivePercentages[f.name]
-                                local scale=percentagePoints and 100 or 1
-                                gain=string.format("%+.12g",outcome.Min*scale)
-                                if outcome.Max-outcome.Min>1e-9 then
-                                    gain=gain.." to "..string.format("%+.12g",outcome.Max*scale)
-                                end
-                                gain=gain..(percentagePoints and " pp" or f.op=="Mul" and " to multiplier" or "")
-                            end
-                        end
-                        local percentage=string.format("%.16f",outcome.Count/report.Total*100):gsub("0+$",""):gsub("%.$","")
-                        lines[#lines+1]=string.format("%s · %s · %s%% (%d/%d)",f.label,gain,percentage,outcome.Count,report.Total)
-                    end
-                    setResults(table.concat(lines,"\n"))
-                    return
-                end
                 local hits={};for i=1,#chosen do hits[i]=0 end
                 local function predicate(result,before,weight)
                     local any=#chosen==0
@@ -1892,10 +1851,12 @@ connect(start.Activated,function()
                 lines[#lines+1]="";lines[#lines+1]="=== MATCHED PREDICTIONS ==="
                 lines[#lines+1]="Total predicts --> "..report.Total
                 lines[#lines+1]="Matched --> "..report.Matched.." ("..percent(report.Matched,report.Total)..")"
-                local _,survival=risk(chain)
-                lines[#lines+1]="All waxes succeed: "..percent(report.AllWaxesSuccessRate,1)
-                lines[#lines+1]=(#chosen>0 and "All succeed + selected improvement: " or "All succeed + any outcome: ")..percent(report.SuccessAndMatchRate,1)
-                lines[#lines+1]="Beequip destroyed: "..percent(1-survival,1)
+                if state.tab~="NEXT" then
+                    local _,survival=risk(chain)
+                    lines[#lines+1]="All waxes succeed: "..percent(report.AllWaxesSuccessRate,1)
+                    lines[#lines+1]=(#chosen>0 and "All succeed + selected improvement: " or "All succeed + any outcome: ")..percent(report.SuccessAndMatchRate,1)
+                    lines[#lines+1]="Beequip destroyed: "..percent(1-survival,1)
+                end
                 lines[#lines+1]=string.format("Exact results · %.2fs%s",report.Seconds,cached and " (reused)" or "")
                 lines[#lines+1]="Percentages below assume all planned waxes succeed."
                 lines[#lines+1]=""

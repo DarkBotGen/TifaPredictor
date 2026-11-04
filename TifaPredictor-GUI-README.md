@@ -1,4 +1,4 @@
-**NEXT WAX** opens setup. Choose a wax and quantity, select one or more stat filters, then press **SIMULATE**. The report shows one combined chance of improvement per stat, its exact roll count, and the cumulative gain or gain range. It assumes every wax succeeds. **OFFSETS** scans hypothetical reset offsets starting at START RC, with 300 steps by default. It preserves the selected history and groups all 32 successful wax rolls at each offset. Use ALL BONUSES BY OFFSET for reachable reset routes.
+**NEXT WAX** opens setup. Choose a wax and quantity, select one or more stat filters, then press **SIMULATE**. The matched results show total outcomes, matches, stat chances, and the resulting values with roll counts. It assumes every wax succeeds. **OFFSETS** scans hypothetical reset offsets starting at START RC, with 300 steps by default. It preserves the selected history and groups all 32 successful wax rolls at each offset. Use ALL BONUSES BY OFFSET for reachable reset routes.
 
 # Predictor GUI
 
