@@ -228,6 +228,16 @@ function Engine.SimulateNextWax(data, waxName, skip, options)
     return file, result
 end
 
+-- Reference Explorer treats each offset as a seeded probe with zero additional wax skip.
+function Engine.ExplorerProbe(data, waxName, offset, options)
+    local file = detached(data, options)
+    file.W = nil
+    file.RC = offset
+    local wax = waxDefinition(waxName)
+    file.W = {{wax.ID, true, 0}}
+    return snapshot(file)
+end
+
 -- Full snapshots for every legal next-wax skip. Final draw count is not a state key:
 -- distinct upgrade histories can finish at the same absolute RNG position.
 function Engine.OffsetOutcomes(data,waxName,predicate,options)

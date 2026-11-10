@@ -230,6 +230,16 @@ function Engine.SimulateNextWax(data, waxName, skip, options)
     return file, result
 end
 
+-- Reference Explorer treats each offset as a seeded probe with zero additional wax skip.
+function Engine.ExplorerProbe(data, waxName, offset, options)
+    local file = detached(data, options)
+    file.W = nil
+    file.RC = offset
+    local wax = waxDefinition(waxName)
+    file.W = {{wax.ID, true, 0}}
+    return snapshot(file)
+end
+
 -- Full snapshots for every legal next-wax skip. Final draw count is not a state key:
 -- distinct upgrade histories can finish at the same absolute RNG position.
 function Engine.OffsetOutcomes(data,waxName,predicate,options)
@@ -1725,7 +1735,7 @@ connect(optionsClose.Activated,function()state.advanced=false;redraw()end)
 connect(changePlanTarget.Activated,function()if editable()then state.planHasResults=false;redraw()end end)
 connect(help.Activated,function()
     if not editable() then return end
-    setResults("HOW TO USE\n\n1. Select a Beequip. Existing waxes stay in the simulation.\n2. Choose wax + quantity; ADD makes a mixed plan. REM undoes one; CLR starts over.\n3. Pick the stats you care about, then START. Selecting targets can make large exact searches much faster.\n\nNEXT WAX\nChoose a wax and quantity, select stats, then SIMULATE to show matching improvements, stat chances, and resulting values.\n\nOFFSETS\nSet START RC and STEPS, then START to list upgrades by hypothetical offset.\n\nAFTER TURP\nPreview the copied item with waxes removed and its reset seed/offset. Toggle off to return to the real current stats. Your item is unchanged.\n\nCHANCES\nOutcome percentages assume all planned waxes succeed. The results also show all-wax success, success plus target, and destruction risk. Failed Hard waxes can leave a surviving item with other results.\n\nAUTO PLAN\nSelect the target filters, then ··· → FIND BEST WAX PLAN. Set the reset limit and seconds budget. It compares exact completed plans and ranks target-plus-survival chance.\n\nHIVE BONUSES\nUnder ···: compare possible hive bonuses at reset-offset scenarios. These are simulations, not guaranteed resource routes.\n\nLong search? STOP is always available. No real waxes or items are used.")
+    setResults("HOW TO USE\n\n1. Select a Beequip. Existing waxes stay in the simulation.\n2. Choose wax + quantity; ADD makes a mixed plan. REM undoes one; CLR starts over.\n3. Pick the stats you care about, then START. Selecting targets can make large exact searches much faster.\n\nNEXT WAX\nChoose a wax and quantity, select stats, then SIMULATE to show matching improvements, stat chances, and resulting values.\n\nOFFSETS\nSet START RC and STEPS, then START to list seeded outcomes. Displayed offsets start at 1 (RC + 1). Use NEXT WAX for chances.\n\nAFTER TURP\nPreview the copied item with waxes removed and its reset seed/offset. Toggle off to return to the real current stats. Your item is unchanged.\n\nCHANCES\nOutcome percentages assume all planned waxes succeed. The results also show all-wax success, success plus target, and destruction risk. Failed Hard waxes can leave a surviving item with other results.\n\nAUTO PLAN\nSelect the target filters, then ··· → FIND BEST WAX PLAN. Set the reset limit and seconds budget. It compares exact completed plans and ranks target-plus-survival chance.\n\nHIVE BONUSES\nUnder ···: compare possible hive bonuses at reset-offset scenarios. These are simulations, not guaranteed resource routes.\n\nLong search? STOP is always available. No real waxes or items are used.")
 end)
 local function number(text,min,max,labelText)
     local n=tonumber(text);assert(n and n%1==0 and n>=min and n<=max,labelText.." must be "..min.."–"..max);return n
@@ -2032,9 +2042,13 @@ connect(start.Activated,function()
                 local count=number(steps.Text,1,1000,"Steps")
                 assert(first+count-1<=100000,"The last RC must be at most 100000")
                 local current=E.Evaluate(item.Data,opts)
+                local baseOpts=table.clone(opts)
+                baseOpts.ShowBase=true
+                baseOpts.Offset=current.TurpentineOffset
+                local baseline=E.Evaluate(item.Data,baseOpts)
                 local lines={"=== EXPLORER RESULTS ===","Base Item Index: "..item.Index,
                     "Simulating Wax: "..state.wax,"Steps: "..count,
-                    "Scan: hypothetical reset offsets (RC), "..first.."–"..(first+count-1),"",
+                    "Seeded probes at RC "..first.."–"..(first+count-1),"",
                     "=== CURRENT STATS ===","","CUR | W: "..#current.WaxHistory.."/5","-------------------------",
                     "Base offset: "..current.BaseOffset,"Offset after turp: "..current.TurpentineOffset,
                     "Current offset: "..current.CurrentOffset,"","-------------------------",
@@ -2051,29 +2065,19 @@ connect(start.Activated,function()
                 opts.OnProgress=nil
                 local matches=0
                 for rc=first,first+count-1 do
-                    opts.Offset=rc
-                    local report=E.OffsetOutcomes(item.Data,state.wax,nil,opts)
-                    local hits={}
-                    for _,row in ipairs(report.Rows) do
-                        local upgrades={}
-                        for _,f in ipairs(candidates) do
-                            if statValue(row.Result,f)>statValue(report.Before,f)+1e-9 then
-                                upgrades[#upgrades+1]=filterDescription(row.Result,f)
-                            end
-                        end
-                        if #upgrades>0 and (#chosen==0 or #upgrades==#chosen) then
-                            local key=table.concat(upgrades,"\n  + ")
-                            hits[key]=(hits[key] or 0)+1
+                    if opts.Cancelled and opts.Cancelled() then error("Prediction cancelled",0) end
+                    local result=E.ExplorerProbe(item.Data,state.wax,rc,opts)
+                    local upgrades={}
+                    for _,f in ipairs(candidates) do
+                        if statValue(result,f)>statValue(baseline,f)+1e-9 then
+                            upgrades[#upgrades+1]=filterDescription(result,f)
                         end
                     end
-                    if next(hits) then
+                    if #upgrades>0 then
                         matches+=1
-                        lines[#lines+1]="[Offset: "..rc.."]"
-                        local keys={}
-                        for key in pairs(hits) do keys[#keys+1]=key end
-                        table.sort(keys)
-                        for _,key in ipairs(keys) do
-                            lines[#lines+1]="  + "..key..string.format(" · %d/32 successful rolls · %.3f%% including wax success",hits[key],100*hits[key]/32*report.WaxSuccessRate)
+                        lines[#lines+1]="[Offset: "..(rc+1).."]"
+                        for _,upgrade in ipairs(upgrades) do
+                            lines[#lines+1]="  + "..upgrade
                         end
                     end
                     reportProgress(rc-first+1,count)
