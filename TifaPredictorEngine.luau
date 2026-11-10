@@ -108,11 +108,9 @@ local function generate(file)
         if wax[2] then upgradeCount += WaxTypes.TypeByID[wax[1]].Upgrades or 0 end
     end
     if def.Upgrades and upgradeCount > 0 then
-        local definitions, counts, values, order, normal, caustic = {}, {}, {}, {}, {}, {}
-        for _, item in ipairs(def.Upgrades) do
-            local key = tag(item)
-            definitions[key], counts[key], values[key] = item, 0, 0
-            order[#order + 1] = key
+        local counts, values, normal, caustic = {}, {}, {}, {}
+        for key, item in ipairs(def.Upgrades) do
+            counts[key], values[key] = 0, 0
             local chance = resolve(item.Chance) or 0
             if not item.CausticOnly then normal[#normal + 1] = {key, chance} end
             caustic[#caustic + 1] = {key, chance}
@@ -135,8 +133,8 @@ local function generate(file)
                     assert(#pool > 0, "Upgrade pool exhausted")
                     local key = RandomPools.SelectFromOrderedList(pool, nextNumber)
                     if key then
-                        local item = definitions[key]
-                        values[key] += resolve(item.Value)
+                        local item = def.Upgrades[key]
+                        values[key] += (item.Value ~= nil and resolve(item.Value) or 0)
                         counts[key] += 1
                         if counts[key] >= item.Max then remove(normal, key); remove(caustic, key) end
                     end
@@ -150,23 +148,29 @@ local function generate(file)
         for _, item in ipairs(bee) do existing[tag({BeeStat = item.Stat, Params = item.Params})] = item end
         for _, item in ipairs(hive) do existing[tag({HiveBonusStat = item.Type,
             Op = item.Op, Params = item.Params})] = item end
-        for _, key in ipairs(order) do
-            local value, item = values[key], definitions[key]
-            if value > 0 then
+        for index, item in ipairs(def.Upgrades) do
+            local value = values[index]
+            if counts[index] > 0 and item.BeeAbility then
+                addAbility(item.BeeAbility, true)
+            elseif counts[index] > 0 and item.BeeAbilityPool then
+                addAbility(RandomPools.SelectFromOrderedList(item.BeeAbilityPool, nextNumber), true)
+            elseif value > 0 then
+                local key = tag(item)
                 local current = existing[key]
                 if current then
-                    current.UpgradeValue, current.FromUpgrade = value, value
+                    current.UpgradeValue = (current.FromUpgrade or 0) + value
+                    current.FromUpgrade = current.UpgradeValue
                     current.Value += value
                 elseif item.BeeStat then
                     local total = value
                     if BeeStatMods.GetType(item.BeeStat).Op == "Mul" then total += 1 end
-                    bee[#bee + 1] = {Stat = item.BeeStat, Value = total, FromUpgrade = value}
+                    current = {Stat = item.BeeStat, Params = item.Params, Value = total, FromUpgrade = value}
+                    bee[#bee + 1] = current
+                    existing[key] = current
                 elseif item.HiveBonusStat then
-                    hive[#hive + 1] = {Type = item.HiveBonusStat, Op = item.Op,
-                        Params = item.Params, Value = value, FromUpgrade = value}
-                elseif item.BeeAbility then addAbility(item.BeeAbility, true)
-                elseif item.BeeAbilityPool then
-                    addAbility(RandomPools.SelectFromOrderedList(item.BeeAbilityPool, nextNumber), true)
+                    current = {Type = item.HiveBonusStat, Op = item.Op, Params = item.Params, Value = value, FromUpgrade = value}
+                    hive[#hive + 1] = current
+                    existing[key] = current
                 end
             end
         end
@@ -489,7 +493,7 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
                 end
                 assert(#pool>0,"Upgrade pool exhausted")
                 local i=RandomPools.SelectFromOrderedList(pool,draw)
-                local value=RQValue.Resolve(upgrades[i].Value,file.Q,draw,def.OldRNG)
+                local value=(upgrades[i].Value ~= nil and RQValue.Resolve(upgrades[i].Value,file.Q,draw,def.OldRNG) or 0)
                 child.Deltas[#child.Deltas+1]={i,value}
                 child.Counts[i]+=1
             end
@@ -528,7 +532,7 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
                 end
                 assert(#pool>0,"Upgrade pool exhausted")
                 local i=RandomPools.SelectFromOrderedList(pool,draw)
-                child.Values[i]+=RQValue.Resolve(upgrades[i].Value,file.Q,draw,def.OldRNG)
+                child.Values[i]+=(upgrades[i].Value ~= nil and RQValue.Resolve(upgrades[i].Value,file.Q,draw,def.OldRNG) or 0)
                 child.Counts[i]+=1
             end
         end
@@ -580,15 +584,26 @@ function Engine.Batch(data, chain, predicate, groupBy, options)
         for _,v in ipairs(hive) do existing[tag({HiveBonusStat=v.Type,Op=v.Op,Params=v.Params})]=v end
         for i,u in ipairs(upgrades) do
             local value=state.Values[i]
-            if value>0 then
+            if state.Counts[i]>0 and u.BeeAbility then
+                addAbility(u.BeeAbility)
+            elseif state.Counts[i]>0 and u.BeeAbilityPool then
+                addAbility(RandomPools.SelectFromOrderedList(u.BeeAbilityPool,draw))
+            elseif value>0 then
                 local v=existing[keys[i]]
-                if v then v.UpgradeValue=value;v.FromUpgrade=value;v.Value+=value
+                if v then
+                    v.UpgradeValue=(v.FromUpgrade or 0)+value
+                    v.FromUpgrade=v.UpgradeValue
+                    v.Value+=value
                 elseif u.BeeStat then
                     local valueWithBase=value+(BeeStatMods.GetType(u.BeeStat).Op=="Mul" and 1 or 0)
-                    bee[#bee+1]={Stat=u.BeeStat,Value=valueWithBase,FromUpgrade=value}
-                elseif u.HiveBonusStat then hive[#hive+1]={Type=u.HiveBonusStat,Op=u.Op,Params=u.Params,Value=value,FromUpgrade=value}
-                elseif u.BeeAbility then addAbility(u.BeeAbility)
-                elseif u.BeeAbilityPool then addAbility(RandomPools.SelectFromOrderedList(u.BeeAbilityPool,draw)) end
+                    v={Stat=u.BeeStat,Params=u.Params,Value=valueWithBase,FromUpgrade=value}
+                    bee[#bee+1]=v
+                    existing[keys[i]]=v
+                elseif u.HiveBonusStat then
+                    v={Type=u.HiveBonusStat,Op=u.Op,Params=u.Params,Value=value,FromUpgrade=value}
+                    hive[#hive+1]=v
+                    existing[keys[i]]=v
+                end
             end
         end
         local history=clone(file.W)
